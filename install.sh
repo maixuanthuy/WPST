@@ -4,7 +4,17 @@
 # Phiên bản: 1.0.0
 # Tác giả: WPST Team
 
-set -e
+set -eE
+
+# Trap function để handle lỗi
+error_handler() {
+    local line_num=$1
+    echo -e "${RED}[LỖI]${NC} Script bị lỗi tại dòng $line_num" >&2
+    echo -e "${RED}[LỖI]${NC} Quá trình cài đặt bị gián đoạn." >&2
+    exit 1
+}
+
+trap 'error_handler ${LINENO}' ERR
 
 # Màu sắc cho output
 RED='\033[0;31m'
@@ -202,16 +212,12 @@ install_frankenphp() {
     info "FrankenPHP đã được cài đặt thành công."
 }
 
-# Nhập email cho SSL (đã loại bỏ)
-get_ssl_email() {
-    log "Bỏ qua bước nhập email SSL..."
-    SSL_EMAIL="admin@localhost"
-    info "Sử dụng email mặc định: $SSL_EMAIL"
-}
-
 # Chọn phiên bản MariaDB
 select_mariadb_version() {
     log "Bắt đầu chọn phiên bản MariaDB..."
+    
+    # Tạm thời disable set -e để tránh thoát khi có input
+    set +e
     
     echo -e "\n${BLUE}Chọn phiên bản MariaDB:${NC}"
     echo "1. MariaDB 10.11 (LTS - Khuyến nghị)"
@@ -222,10 +228,7 @@ select_mariadb_version() {
     
     while true; do
         echo -n "Lựa chọn (1-2) [1]: "
-        read -r MARIADB_CHOICE
-        
-        # Check if read was successful
-        if [[ $? -ne 0 ]]; then
+        if ! read -r MARIADB_CHOICE; then
             warning "Input bị gián đoạn, sử dụng giá trị mặc định: MariaDB 10.11"
             break
         fi
@@ -249,6 +252,9 @@ select_mariadb_version() {
                 ;;
         esac
     done
+    
+    # Bật lại set -e
+    set -eE
     
     info "Đã chọn MariaDB $MARIADB_VERSION"
 }
@@ -572,7 +578,7 @@ EOF
     
     # Thực hiện từng bước với error handling
     local step=1
-    local total_steps=11
+    local total_steps=10
     
     log "Step $step/$total_steps: Kiểm tra quyền root..."
     check_root
@@ -592,10 +598,6 @@ EOF
     
     log "Step $step/$total_steps: Cài đặt FrankenPHP..."
     install_frankenphp
-    ((step++))
-    
-    log "Step $step/$total_steps: Cấu hình SSL..."
-    get_ssl_email
     ((step++))
     
     log "Step $step/$total_steps: Chọn phiên bản MariaDB..."
@@ -620,7 +622,6 @@ EOF
     
     log "Step $step/$total_steps: Khởi động dịch vụ..."
     start_services
-    ((step++))
     
     log "Step $step/$total_steps: Cài đặt WPST script..."
     install_wpst_script
