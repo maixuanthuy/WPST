@@ -51,6 +51,11 @@ check_root() {
     if [[ $EUID -ne 0 ]]; then
         error "Script này cần chạy với quyền root. Vui lòng chạy: sudo $0"
     fi
+    
+    # Kiểm tra stdin availability
+    if [[ ! -t 0 ]]; then
+        warning "Stdin không khả dụng, sẽ sử dụng các giá trị mặc định."
+    fi
 }
 
 # Detect OS và Architecture
@@ -212,50 +217,10 @@ install_frankenphp() {
     info "FrankenPHP đã được cài đặt thành công."
 }
 
-# Chọn phiên bản MariaDB
+# Chọn phiên bản MariaDB (fixed to 11.8)
 select_mariadb_version() {
-    log "Bắt đầu chọn phiên bản MariaDB..."
-    
-    # Tạm thời disable set -e để tránh thoát khi có input
-    set +e
-    
-    echo -e "\n${BLUE}Chọn phiên bản MariaDB:${NC}"
-    echo "1. MariaDB 10.11 (LTS - Khuyến nghị)"
-    echo "2. MariaDB 11.8 (Stable)"
-    
-    # Set default value
-    MARIADB_VERSION="10.11"
-    
-    while true; do
-        echo -n "Lựa chọn (1-2) [1]: "
-        if ! read -r MARIADB_CHOICE; then
-            warning "Input bị gián đoạn, sử dụng giá trị mặc định: MariaDB 10.11"
-            break
-        fi
-        
-        # Handle empty input
-        if [[ -z "$MARIADB_CHOICE" ]]; then
-            MARIADB_CHOICE="1"
-        fi
-        
-        case $MARIADB_CHOICE in
-            1)
-                MARIADB_VERSION="10.11"
-                break
-                ;;
-            2)
-                MARIADB_VERSION="11.8"
-                break
-                ;;
-            *)
-                warning "Lựa chọn không hợp lệ. Vui lòng chọn 1 hoặc 2."
-                ;;
-        esac
-    done
-    
-    # Bật lại set -e
-    set -eE
-    
+    log "Sử dụng MariaDB 11.8..."
+    MARIADB_VERSION="11.8"
     info "Đã chọn MariaDB $MARIADB_VERSION"
 }
 
@@ -356,7 +321,6 @@ create_frankenphp_config() {
     cat > /etc/frankenphp/Caddyfile << EOF
 {
     frankenphp
-    trusted_proxies 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
 }
 
 # Import site configurations
@@ -419,13 +383,30 @@ EOF
 start_services() {
     log "Khởi động các dịch vụ..."
     
-    systemctl restart frankenphp
+    # Start FrankenPHP
+    log "Đang khởi động FrankenPHP..."
+    if ! systemctl restart frankenphp; then
+        warning "Không thể khởi động FrankenPHP, đang kiểm tra lỗi..."
+        
+        # Show error details
+        echo "=== FrankenPHP Service Status ==="
+        systemctl status frankenphp --no-pager || true
+        echo ""
+        echo "=== FrankenPHP Logs ==="
+        journalctl -u frankenphp -n 20 --no-pager || true
+        echo ""
+        echo "=== Caddyfile Content ==="
+        cat /etc/frankenphp/Caddyfile || true
+        
+        error "Không thể khởi động FrankenPHP service."
+    fi
+    
     systemctl enable frankenphp
     
     if systemctl is-active --quiet frankenphp; then
         info "FrankenPHP đã được khởi động thành công."
     else
-        error "Không thể khởi động FrankenPHP."
+        error "FrankenPHP service không hoạt động."
     fi
 }
 
@@ -578,7 +559,7 @@ EOF
     
     # Thực hiện từng bước với error handling
     local step=1
-    local total_steps=10
+    local total_steps=9
     
     log "Step $step/$total_steps: Kiểm tra quyền root..."
     check_root
@@ -600,11 +581,8 @@ EOF
     install_frankenphp
     ((step++))
     
-    log "Step $step/$total_steps: Chọn phiên bản MariaDB..."
-    select_mariadb_version
-    ((step++))
-    
     log "Step $step/$total_steps: Cài đặt MariaDB..."
+    select_mariadb_version
     install_mariadb
     ((step++))
     
@@ -622,6 +600,7 @@ EOF
     
     log "Step $step/$total_steps: Khởi động dịch vụ..."
     start_services
+    ((step++))
     
     log "Step $step/$total_steps: Cài đặt WPST script..."
     install_wpst_script
