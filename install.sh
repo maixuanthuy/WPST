@@ -202,29 +202,11 @@ install_frankenphp() {
     info "FrankenPHP đã được cài đặt thành công."
 }
 
-# Nhập email cho SSL
+# Nhập email cho SSL (đã loại bỏ)
 get_ssl_email() {
-    log "Bắt đầu nhập email SSL..."
-    
-    while true; do
-        echo -e "\n${BLUE}Nhập email để cấu hình SSL tự động (Let's Encrypt):${NC}"
-        read -p "Email: " SSL_EMAIL
-        
-        # Kiểm tra nếu user nhấn Ctrl+C
-        if [[ $? -ne 0 ]]; then
-            error "Người dùng đã hủy quá trình cài đặt."
-        fi
-        
-        # Validate email
-        if [[ $SSL_EMAIL =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
-            info "Email hợp lệ: $SSL_EMAIL"
-            break
-        else
-            warning "Email không hợp lệ. Vui lòng nhập lại."
-        fi
-    done
-    
-    log "Email SSL đã được nhập thành công: $SSL_EMAIL"
+    log "Bỏ qua bước nhập email SSL..."
+    SSL_EMAIL="admin@localhost"
+    info "Sử dụng email mặc định: $SSL_EMAIL"
 }
 
 # Chọn phiên bản MariaDB
@@ -350,7 +332,6 @@ create_frankenphp_config() {
     cat > /etc/frankenphp/Caddyfile << EOF
 {
     frankenphp
-    email $SSL_EMAIL
     trusted_proxies 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
 }
 
@@ -535,7 +516,7 @@ show_completion_info() {
     echo -e "${BLUE}✅ Thông Tin Hệ Thống:${NC}"
     echo -e "   FrankenPHP: $FRANKENPHP_VERSION đã cài đặt & chạy"
     echo -e "   MariaDB: $MARIADB_VERSION đã cài đặt & bảo mật"
-    echo -e "   SSL Email: $SSL_EMAIL đã cấu hình cho Let's Encrypt"
+    echo -e "   SSL: Tự động với Let's Encrypt"
     echo -e "   Panel Location: $WPST_DIR"
     echo -e "   Sites Directory: $SITES_DIR"
     
@@ -573,7 +554,7 @@ EOF
     
     # Thực hiện từng bước với error handling
     local step=1
-    local total_steps=12
+    local total_steps=11
     
     log "Step $step/$total_steps: Kiểm tra quyền root..."
     check_root
@@ -595,7 +576,7 @@ EOF
     install_frankenphp
     ((step++))
     
-    log "Step $step/$total_steps: Nhập email SSL..."
+    log "Step $step/$total_steps: Cấu hình SSL..."
     get_ssl_email
     ((step++))
     
