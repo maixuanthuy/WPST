@@ -3,6 +3,11 @@
 # WPST Panel - WordPress Stack Tool Installer
 # Phiên bản: 1.0.0
 # Tác giả: WPST Team
+#
+# Usage:
+#   Interactive: ./install.sh
+#   Automated:   curl -sSL https://url/install.sh | sudo bash
+#   With args:   ./install.sh --auto --mariadb=11.8
 
 set -eE
 
@@ -28,6 +33,58 @@ WPST_DIR="/var/www/wpst-script"
 SITES_DIR="/var/www/sites"
 LOG_FILE="/tmp/wpst-install.log"
 
+# Installation mode
+AUTO_MODE=false
+MARIADB_VERSION="11.8"
+
+# Parse command line arguments
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --auto)
+                AUTO_MODE=true
+                shift
+                ;;
+            --mariadb=*)
+                MARIADB_VERSION="${1#*=}"
+                shift
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            *)
+                warning "Unknown option: $1"
+                shift
+                ;;
+        esac
+    done
+    
+    # Auto-detect pipe mode
+    if [[ ! -t 0 ]]; then
+        AUTO_MODE=true
+        info "Phát hiện pipe mode, sử dụng chế độ tự động."
+    fi
+}
+
+show_help() {
+    echo "WPST Panel Installer"
+    echo ""
+    echo "Usage:"
+    echo "  $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --auto              Chế độ tự động (không cần input)"
+    echo "  --mariadb=VERSION   Chọn phiên bản MariaDB (10.11 hoặc 11.8)"
+    echo "  -h, --help          Hiển thị help"
+    echo ""
+    echo "Examples:"
+    echo "  $0                                    # Interactive mode"
+    echo "  $0 --auto                            # Auto mode với defaults"
+    echo "  $0 --auto --mariadb=10.11           # Auto mode với MariaDB 10.11"
+    echo "  curl -sSL url/install.sh | sudo bash # Auto mode via pipe"
+}
+
 # Functions
 log() {
     echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1" | tee -a "$LOG_FILE"
@@ -50,11 +107,6 @@ info() {
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         error "Script này cần chạy với quyền root. Vui lòng chạy: sudo $0"
-    fi
-    
-    # Kiểm tra stdin availability
-    if [[ ! -t 0 ]]; then
-        warning "Stdin không khả dụng, sẽ sử dụng các giá trị mặc định."
     fi
 }
 
@@ -217,10 +269,48 @@ install_frankenphp() {
     info "FrankenPHP đã được cài đặt thành công."
 }
 
-# Chọn phiên bản MariaDB (fixed to 11.8)
+# Chọn phiên bản MariaDB
 select_mariadb_version() {
-    log "Sử dụng MariaDB 11.8..."
-    MARIADB_VERSION="11.8"
+    if [[ "$AUTO_MODE" == "true" ]]; then
+        log "Chế độ tự động: Sử dụng MariaDB $MARIADB_VERSION"
+        info "Đã chọn MariaDB $MARIADB_VERSION"
+        return
+    fi
+    
+    log "Chọn phiên bản MariaDB..."
+    
+    echo -e "\n${BLUE}Chọn phiên bản MariaDB:${NC}"
+    echo "1. MariaDB 10.11 (LTS - Khuyến nghị)"
+    echo "2. MariaDB 11.8 (Stable)"
+    
+    while true; do
+        echo -n "Lựa chọn (1-2) [2]: "
+        read -r MARIADB_CHOICE || {
+            warning "Không thể đọc input, sử dụng mặc định: MariaDB 11.8"
+            MARIADB_CHOICE="2"
+            break
+        }
+        
+        # Handle empty input
+        if [[ -z "$MARIADB_CHOICE" ]]; then
+            MARIADB_CHOICE="2"
+        fi
+        
+        case $MARIADB_CHOICE in
+            1)
+                MARIADB_VERSION="10.11"
+                break
+                ;;
+            2)
+                MARIADB_VERSION="11.8"
+                break
+                ;;
+            *)
+                warning "Lựa chọn không hợp lệ. Vui lòng chọn 1 hoặc 2."
+                ;;
+        esac
+    done
+    
     info "Đã chọn MariaDB $MARIADB_VERSION"
 }
 
@@ -534,13 +624,28 @@ show_completion_info() {
     echo -e "   Mật khẩu MariaDB root đã được lưu an toàn"
     echo -e "   Log cài đặt: $LOG_FILE"
     
+    if [[ "$AUTO_MODE" == "true" ]]; then
+        echo -e "\n${BLUE}💡 Cài Đặt Tự Động:${NC}"
+        echo -e "   Script đã chạy ở chế độ tự động với MariaDB $MARIADB_VERSION"
+        echo -e "   Để cài đặt interactive: wget script và chạy ./install.sh"
+    fi
+    
     echo -e "\n${GREEN}Cảm ơn bạn đã sử dụng WPST Panel!${NC}"
 }
 
 # Main installation process
 main() {
+    # Parse command line arguments
+    parse_args "$@"
+    
     # Trap để handle Ctrl+C
     trap 'echo -e "\n${RED}Đã hủy cài đặt.${NC}"; exit 1' INT TERM
+    
+    if [[ "$AUTO_MODE" == "true" ]]; then
+        info "🤖 Chế độ cài đặt tự động"
+        info "📦 MariaDB version: $MARIADB_VERSION"
+        echo ""
+    fi
     
     echo -e "${BLUE}"
     cat << 'EOF'
@@ -581,7 +686,7 @@ EOF
     install_frankenphp
     ((step++))
     
-    log "Step $step/$total_steps: Cài đặt MariaDB..."
+    log "Step $step/$total_steps: Chọn & cài đặt MariaDB..."
     select_mariadb_version
     install_mariadb
     ((step++))
