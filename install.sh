@@ -211,12 +211,30 @@ get_ssl_email() {
 
 # Chọn phiên bản MariaDB
 select_mariadb_version() {
+    log "Bắt đầu chọn phiên bản MariaDB..."
+    
     echo -e "\n${BLUE}Chọn phiên bản MariaDB:${NC}"
     echo "1. MariaDB 10.11 (LTS - Khuyến nghị)"
     echo "2. MariaDB 11.8 (Stable)"
     
+    # Set default value
+    MARIADB_VERSION="10.11"
+    
     while true; do
-        read -p "Lựa chọn (1-2): " MARIADB_CHOICE
+        echo -n "Lựa chọn (1-2) [1]: "
+        read -r MARIADB_CHOICE
+        
+        # Check if read was successful
+        if [[ $? -ne 0 ]]; then
+            warning "Input bị gián đoạn, sử dụng giá trị mặc định: MariaDB 10.11"
+            break
+        fi
+        
+        # Handle empty input
+        if [[ -z "$MARIADB_CHOICE" ]]; then
+            MARIADB_CHOICE="1"
+        fi
+        
         case $MARIADB_CHOICE in
             1)
                 MARIADB_VERSION="10.11"
