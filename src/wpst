@@ -1,0 +1,335 @@
+#!/bin/bash
+
+# WPST Panel - WordPress Stack Tool
+# Main executable script
+# Phiên bản: 1.0.0
+
+set -e
+
+# Đường dẫn cấu hình
+WPST_DIR="/var/www/wpst-script"
+SITES_DIR="/var/www/sites"
+LIB_DIR="$WPST_DIR/lib"
+
+# Load thư viện
+source "$LIB_DIR/common.sh"
+source "$LIB_DIR/ui.sh"
+source "$LIB_DIR/system.sh"
+source "$LIB_DIR/sites.sh"
+
+# Biến toàn cục
+CURRENT_MENU="main"
+SELECTED_SITE=""
+
+# Kiểm tra quyền root
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        error "WPST Panel cần chạy với quyền root. Vui lòng chạy: sudo wpst"
+    fi
+}
+
+# Main menu dashboard
+show_main_dashboard() {
+    clear
+    show_header "WPST - WordPress Stack Tool"
+    
+    # Phần Status
+    echo -e "${BLUE}📊 TRẠNG THÁI HỆ THỐNG${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Thống kê website
+    local site_count=$(count_sites)
+    echo -e "🌐 Số lượng domain: ${GREEN}$site_count${NC}"
+    
+    # Thông tin hệ thống (refresh mỗi 2 giây - sẽ implement sau)
+    show_system_stats
+    
+    # Trạng thái dịch vụ
+    show_service_status
+    
+    echo ""
+    
+    # Phần Menu
+    echo -e "${BLUE}📋 MENU CHÍNH${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "1. Quản lý Website"
+    echo "2. Firewall / Security"
+    echo "3. Cập nhật"
+    echo "4. System Admin"
+    echo ""
+    echo "0. Thoát"
+    echo ""
+    
+    read -p "Lựa chọn (0-4): " choice
+    
+    case $choice in
+        1)
+            CURRENT_MENU="sites"
+            show_sites_dashboard
+            ;;
+        2)
+            CURRENT_MENU="firewall"
+            show_firewall_dashboard
+            ;;
+        3)
+            CURRENT_MENU="update"
+            show_update_dashboard
+            ;;
+        4)
+            CURRENT_MENU="admin"
+            show_admin_dashboard
+            ;;
+        0)
+            echo -e "${GREEN}Cảm ơn bạn đã sử dụng WPST Panel!${NC}"
+            exit 0
+            ;;
+        *)
+            warning "Lựa chọn không hợp lệ."
+            sleep 1
+            show_main_dashboard
+            ;;
+    esac
+}
+
+# Sites management dashboard
+show_sites_dashboard() {
+    clear
+    show_header "Quản lý Website"
+    
+    # Phần Status - danh sách websites
+    echo -e "${BLUE}🌐 DANH SÁCH WEBSITE${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    list_sites_table
+    
+    echo ""
+    echo -e "${BLUE}📋 MENU QUẢN LÝ${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Hiển thị menu động dựa trên số lượng sites
+    local sites=($(get_sites_list))
+    if [[ ${#sites[@]} -gt 0 ]]; then
+        echo "Chọn số để quản lý website:"
+        for i in "${!sites[@]}"; do
+            echo "$((i+1)). ${sites[i]}"
+        done
+        echo ""
+    fi
+    
+    echo "n. Thêm website mới"
+    echo "0. Quay lại dashboard chính"
+    echo "q. Thoát"
+    echo ""
+    
+    read -p "Lựa chọn: " choice
+    
+    case $choice in
+        [1-9]|[1-9][0-9])
+            if [[ $choice -le ${#sites[@]} ]]; then
+                SELECTED_SITE="${sites[$((choice-1))]}"
+                show_single_site_dashboard "$SELECTED_SITE"
+            else
+                warning "Lựa chọn không hợp lệ."
+                sleep 1
+                show_sites_dashboard
+            fi
+            ;;
+        n|N)
+            add_new_site
+            ;;
+        0)
+            CURRENT_MENU="main"
+            show_main_dashboard
+            ;;
+        q|Q)
+            echo -e "${GREEN}Cảm ơn bạn đã sử dụng WPST Panel!${NC}"
+            exit 0
+            ;;
+        *)
+            warning "Lựa chọn không hợp lệ."
+            sleep 1
+            show_sites_dashboard
+            ;;
+    esac
+}
+
+# Single site management dashboard
+show_single_site_dashboard() {
+    local domain="$1"
+    
+    clear
+    show_header "Quản lý Website: $domain"
+    
+    # Phần Status - thông tin chi tiết site
+    echo -e "${BLUE}📋 THÔNG TIN WEBSITE${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    show_site_details "$domain"
+    
+    echo ""
+    echo -e "${BLUE}📋 MENU QUẢN LÝ${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "1. Caddyfile"
+    echo "2. Cài đặt SSL thủ công"
+    echo "3. File Manager"
+    echo "4. Database"
+    echo "5. Backup & Restore"
+    
+    # Hiển thị menu bật/tắt động
+    local site_status=$(get_site_status "$domain")
+    if [[ "$site_status" == "online" ]]; then
+        echo "6. Tắt website"
+    else
+        echo "6. Bật website"
+    fi
+    
+    echo "7. Xóa website"
+    echo ""
+    echo "0. Quay lại danh sách website"
+    echo "q. Thoát"
+    echo ""
+    
+    read -p "Lựa chọn: " choice
+    
+    case $choice in
+        1)
+            edit_caddyfile "$domain"
+            ;;
+        2)
+            setup_custom_ssl "$domain"
+            ;;
+        3)
+            open_file_manager "$domain"
+            ;;
+        4)
+            manage_database "$domain"
+            ;;
+        5)
+            backup_restore_site "$domain"
+            ;;
+        6)
+            toggle_site_status "$domain"
+            ;;
+        7)
+            delete_site "$domain"
+            ;;
+        0)
+            show_sites_dashboard
+            ;;
+        q|Q)
+            echo -e "${GREEN}Cảm ơn bạn đã sử dụng WPST Panel!${NC}"
+            exit 0
+            ;;
+        *)
+            warning "Lựa chọn không hợp lệ."
+            sleep 1
+            show_single_site_dashboard "$domain"
+            ;;
+    esac
+}
+
+# Placeholder cho các dashboard khác
+show_firewall_dashboard() {
+    clear
+    show_header "Firewall / Security"
+    echo "Chức năng đang phát triển..."
+    echo ""
+    read -p "Nhấn Enter để quay lại..." 
+    show_main_dashboard
+}
+
+show_update_dashboard() {
+    clear
+    show_header "Cập Nhật"
+    echo "Chức năng đang phát triển..."
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+    show_main_dashboard
+}
+
+show_admin_dashboard() {
+    clear
+    show_header "System Admin"
+    echo "Chức năng đang phát triển..."
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+    show_main_dashboard
+}
+
+# Xử lý tham số dòng lệnh
+handle_arguments() {
+    case $1 in
+        "sites"|"1")
+            CURRENT_MENU="sites"
+            show_sites_dashboard
+            ;;
+        "firewall"|"2")
+            CURRENT_MENU="firewall"
+            show_firewall_dashboard
+            ;;
+        "update"|"3")
+            CURRENT_MENU="update"
+            show_update_dashboard
+            ;;
+        "admin"|"4")
+            CURRENT_MENU="admin"
+            show_admin_dashboard
+            ;;
+        "--help"|"-h")
+            show_help
+            ;;
+        "--version"|"-v")
+            show_version
+            ;;
+        "")
+            show_main_dashboard
+            ;;
+        *)
+            error "Tham số không hợp lệ: $1. Chạy 'wpst --help' để xem hướng dẫn."
+            ;;
+    esac
+}
+
+# Hiển thị help
+show_help() {
+    echo -e "${BLUE}WPST Panel - WordPress Stack Tool${NC}"
+    echo ""
+    echo "Cách sử dụng:"
+    echo "  wpst                 Mở dashboard chính"
+    echo "  wpst sites          Mở quản lý website"
+    echo "  wpst firewall       Mở quản lý firewall"
+    echo "  wpst update         Mở menu cập nhật"
+    echo "  wpst admin          Mở system admin"
+    echo ""
+    echo "Tùy chọn:"
+    echo "  --help, -h          Hiển thị hướng dẫn"
+    echo "  --version, -v       Hiển thị phiên bản"
+    echo ""
+}
+
+# Hiển thị version
+show_version() {
+    echo "WPST Panel phiên bản 1.0.0"
+}
+
+# Main function
+main() {
+    # Kiểm tra cài đặt
+    if [[ ! -d "$WPST_DIR" ]]; then
+        error "WPST Panel chưa được cài đặt. Vui lòng chạy script cài đặt trước."
+    fi
+    
+    check_root
+    
+    # Khởi tạo màn hình
+    init_screen
+    
+    # Xử lý tham số
+    handle_arguments "$1"
+}
+
+# Trap để cleanup khi exit
+trap cleanup EXIT
+
+# Chạy main function
+main "$@"
