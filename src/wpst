@@ -1,335 +1,398 @@
 #!/bin/bash
 
 # WPST Panel - WordPress Stack Tool
-# Main executable script
 # Phiên bản: 1.0.0
-
-set -e
 
 # Đường dẫn cấu hình
 WPST_DIR="/var/www/wpst-script"
 SITES_DIR="/var/www/sites"
-LIB_DIR="$WPST_DIR/lib"
+CONFIG_DIR="$WPST_DIR/config"
+LOG_DIR="$WPST_DIR/logs"
 
-# Load thư viện
-source "$LIB_DIR/common.sh"
-source "$LIB_DIR/ui.sh"
-source "$LIB_DIR/system.sh"
-source "$LIB_DIR/sites.sh"
+# Màu sắc
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+NC='\033[0m' # No Color
 
-# Biến toàn cục
-CURRENT_MENU="main"
-SELECTED_SITE=""
+# Load common functions nếu có
+if [[ -f "$WPST_DIR/lib/common.sh" ]]; then
+    source "$WPST_DIR/lib/common.sh"
+fi
 
-# Kiểm tra quyền root
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        error "WPST Panel cần chạy với quyền root. Vui lòng chạy: sudo wpst"
-    fi
+# Functions cơ bản nếu không có common.sh
+log() {
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
 }
 
-# Main menu dashboard
-show_main_dashboard() {
-    clear
-    show_header "WPST - WordPress Stack Tool"
-    
-    # Phần Status
-    echo -e "${BLUE}📊 TRẠNG THÁI HỆ THỐNG${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    
-    # Thống kê website
-    local site_count=$(count_sites)
-    echo -e "🌐 Số lượng domain: ${GREEN}$site_count${NC}"
-    
-    # Thông tin hệ thống (refresh mỗi 2 giây - sẽ implement sau)
-    show_system_stats
-    
-    # Trạng thái dịch vụ
-    show_service_status
-    
-    echo ""
-    
-    # Phần Menu
-    echo -e "${BLUE}📋 MENU CHÍNH${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "1. Quản lý Website"
-    echo "2. Firewall / Security"
-    echo "3. Cập nhật"
-    echo "4. System Admin"
-    echo ""
-    echo "0. Thoát"
-    echo ""
-    
-    read -p "Lựa chọn (0-4): " choice
-    
-    case $choice in
-        1)
-            CURRENT_MENU="sites"
-            show_sites_dashboard
-            ;;
-        2)
-            CURRENT_MENU="firewall"
-            show_firewall_dashboard
-            ;;
-        3)
-            CURRENT_MENU="update"
-            show_update_dashboard
-            ;;
-        4)
-            CURRENT_MENU="admin"
-            show_admin_dashboard
-            ;;
-        0)
-            echo -e "${GREEN}Cảm ơn bạn đã sử dụng WPST Panel!${NC}"
-            exit 0
-            ;;
-        *)
-            warning "Lựa chọn không hợp lệ."
-            sleep 1
-            show_main_dashboard
-            ;;
-    esac
+error() {
+    echo -e "${RED}[LỖI]${NC} $1"
+    exit 1
 }
 
-# Sites management dashboard
-show_sites_dashboard() {
+warning() {
+    echo -e "${YELLOW}[CẢNH BÁO]${NC} $1"
+}
+
+info() {
+    echo -e "${BLUE}[THÔNG TIN]${NC} $1"
+}
+
+success() {
+    echo -e "${GREEN}[THÀNH CÔNG]${NC} $1"
+}
+
+# ASCII Logo
+show_ascii_logo() {
+    echo -e "${CYAN}"
+    cat << 'EOF'
+ _    _ _____   _____ _______   _____                 _ 
+| |  | |  __ \ / ____|__   __| |  __ \               | |
+| |  | | |__) | (___    | |    | |__) |_ _ _ __   ___ | |
+| |/\| |  ___/ \___ \   | |    |  ___/ _` | '_ \ / _ \| |
+\  /\  / |     ____) |  | |    | |  | (_| | | | |  __/| |
+ \/  \/|_|    |_____/   |_|    |_|   \__,_|_| |_|\___||_|
+
+WordPress Stack Tool - Phiên bản 1.0.0
+EOF
+    echo -e "${NC}"
+}
+
+# System stats
+show_quick_stats() {
+    local hostname=$(hostname)
+    local uptime=$(uptime -p 2>/dev/null || echo "Unknown")
+    local load=$(uptime | awk -F'load average:' '{ print $2 }' | sed 's/^ *//' 2>/dev/null || echo "Unknown")
+    
+    echo -e "${CYAN}🖥️  Server: ${WHITE}$hostname${NC} | ${CYAN}⏱️  Uptime: ${WHITE}$uptime${NC}"
+    echo -e "${CYAN}📊 Load: ${WHITE}$load${NC}"
+}
+
+# Menu functions
+show_sites_menu() {
     clear
     show_header "Quản lý Website"
     
-    # Phần Status - danh sách websites
-    echo -e "${BLUE}🌐 DANH SÁCH WEBSITE${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    local sites=()
+    if [[ -d "$SITES_DIR" ]]; then
+        for site_dir in "$SITES_DIR"/*; do
+            if [[ -d "$site_dir" ]]; then
+                sites+=($(basename "$site_dir"))
+            fi
+        done
+    fi
     
-    list_sites_table
-    
-    echo ""
-    echo -e "${BLUE}📋 MENU QUẢN LÝ${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    
-    # Hiển thị menu động dựa trên số lượng sites
-    local sites=($(get_sites_list))
-    if [[ ${#sites[@]} -gt 0 ]]; then
-        echo "Chọn số để quản lý website:"
+    if [[ ${#sites[@]} -eq 0 ]]; then
+        echo -e "${YELLOW}Chưa có website nào được tạo.${NC}"
+        echo ""
+        echo "1. Thêm website mới"
+        echo "0. Quay lại"
+        echo ""
+        read -p "Lựa chọn: " choice
+        
+        case $choice in
+            1) add_new_site ;;
+            0) show_main_menu ;;
+            *) echo "Lựa chọn không hợp lệ."; sleep 1; show_sites_menu ;;
+        esac
+    else
+        echo "Danh sách website:"
         for i in "${!sites[@]}"; do
             echo "$((i+1)). ${sites[i]}"
         done
         echo ""
-    fi
-    
-    echo "n. Thêm website mới"
-    echo "0. Quay lại dashboard chính"
-    echo "q. Thoát"
-    echo ""
-    
-    read -p "Lựa chọn: " choice
-    
-    case $choice in
-        [1-9]|[1-9][0-9])
-            if [[ $choice -le ${#sites[@]} ]]; then
-                SELECTED_SITE="${sites[$((choice-1))]}"
-                show_single_site_dashboard "$SELECTED_SITE"
-            else
-                warning "Lựa chọn không hợp lệ."
-                sleep 1
-                show_sites_dashboard
-            fi
-            ;;
-        n|N)
-            add_new_site
-            ;;
-        0)
-            CURRENT_MENU="main"
-            show_main_dashboard
-            ;;
-        q|Q)
-            echo -e "${GREEN}Cảm ơn bạn đã sử dụng WPST Panel!${NC}"
-            exit 0
-            ;;
-        *)
-            warning "Lựa chọn không hợp lệ."
+        echo "0. Quay lại"
+        echo ""
+        read -p "Chọn website (0-${#sites[@]}): " choice
+        
+        if [[ "$choice" == "0" ]]; then
+            show_main_menu
+        elif [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le ${#sites[@]} ]]; then
+            local selected_site="${sites[$((choice-1))]}"
+            show_site_details_menu "$selected_site"
+        else
+            echo "Lựa chọn không hợp lệ."
             sleep 1
-            show_sites_dashboard
-            ;;
-    esac
+            show_sites_menu
+        fi
+    fi
 }
 
-# Single site management dashboard
-show_single_site_dashboard() {
+show_site_details_menu() {
     local domain="$1"
-    
     clear
-    show_header "Quản lý Website: $domain"
+    show_header "Website: $domain"
     
-    # Phần Status - thông tin chi tiết site
-    echo -e "${BLUE}📋 THÔNG TIN WEBSITE${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    
-    show_site_details "$domain"
-    
-    echo ""
-    echo -e "${BLUE}📋 MENU QUẢN LÝ${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "1. Caddyfile"
-    echo "2. Cài đặt SSL thủ công"
-    echo "3. File Manager"
-    echo "4. Database"
+    echo "1. Xem thông tin chi tiết"
+    echo "2. Bật/Tắt website"
+    echo "3. Chỉnh sửa cấu hình"
+    echo "4. Quản lý database"
     echo "5. Backup & Restore"
-    
-    # Hiển thị menu bật/tắt động
-    local site_status=$(get_site_status "$domain")
-    if [[ "$site_status" == "online" ]]; then
-        echo "6. Tắt website"
-    else
-        echo "6. Bật website"
-    fi
-    
-    echo "7. Xóa website"
+    echo "6. Xóa website"
+    echo "0. Quay lại"
     echo ""
-    echo "0. Quay lại danh sách website"
-    echo "q. Thoát"
-    echo ""
-    
     read -p "Lựa chọn: " choice
     
     case $choice in
-        1)
-            edit_caddyfile "$domain"
-            ;;
-        2)
-            setup_custom_ssl "$domain"
-            ;;
-        3)
-            open_file_manager "$domain"
-            ;;
-        4)
-            manage_database "$domain"
-            ;;
-        5)
-            backup_restore_site "$domain"
-            ;;
-        6)
-            toggle_site_status "$domain"
-            ;;
-        7)
-            delete_site "$domain"
-            ;;
-        0)
-            show_sites_dashboard
-            ;;
-        q|Q)
-            echo -e "${GREEN}Cảm ơn bạn đã sử dụng WPST Panel!${NC}"
-            exit 0
-            ;;
-        *)
-            warning "Lựa chọn không hợp lệ."
-            sleep 1
-            show_single_site_dashboard "$domain"
-            ;;
+        1) show_site_info "$domain" ;;
+        2) toggle_site "$domain" ;;
+        3) edit_site_config "$domain" ;;
+        4) manage_site_database "$domain" ;;
+        5) backup_site "$domain" ;;
+        6) delete_site "$domain" ;;
+        0) show_sites_menu ;;
+        *) echo "Lựa chọn không hợp lệ."; sleep 1; show_site_details_menu "$domain" ;;
     esac
 }
 
-# Placeholder cho các dashboard khác
-show_firewall_dashboard() {
+show_system_info() {
     clear
-    show_header "Firewall / Security"
-    echo "Chức năng đang phát triển..."
+    show_header "Thông tin Hệ thống"
+    
+    echo "🖥️  Hệ điều hành: $(cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2 2>/dev/null || echo "Unknown")"
+    echo "💾 RAM: $(free -h | awk 'NR==2{printf "%.1f/%.1f GB", $3/1024, $2/1024}')"
+    echo "💿 Disk: $(df -h / | awk 'NR==2{print $3"/"$2" ("$5")"}')"
+    echo "🔧 FrankenPHP: $(systemctl is-active frankenphp 2>/dev/null || echo "Unknown")"
+    echo "🗃️  MariaDB: $(systemctl is-active mariadb 2>/dev/null || echo "Unknown")"
     echo ""
-    read -p "Nhấn Enter để quay lại..." 
-    show_main_dashboard
-}
-
-show_update_dashboard() {
-    clear
-    show_header "Cập Nhật"
-    echo "Chức năng đang phát triển..."
+    echo "0. Quay lại"
     echo ""
-    read -p "Nhấn Enter để quay lại..."
-    show_main_dashboard
-}
-
-show_admin_dashboard() {
-    clear
-    show_header "System Admin"
-    echo "Chức năng đang phát triển..."
-    echo ""
-    read -p "Nhấn Enter để quay lại..."
-    show_main_dashboard
-}
-
-# Xử lý tham số dòng lệnh
-handle_arguments() {
-    case $1 in
-        "sites"|"1")
-            CURRENT_MENU="sites"
-            show_sites_dashboard
-            ;;
-        "firewall"|"2")
-            CURRENT_MENU="firewall"
-            show_firewall_dashboard
-            ;;
-        "update"|"3")
-            CURRENT_MENU="update"
-            show_update_dashboard
-            ;;
-        "admin"|"4")
-            CURRENT_MENU="admin"
-            show_admin_dashboard
-            ;;
-        "--help"|"-h")
-            show_help
-            ;;
-        "--version"|"-v")
-            show_version
-            ;;
-        "")
-            show_main_dashboard
-            ;;
-        *)
-            error "Tham số không hợp lệ: $1. Chạy 'wpst --help' để xem hướng dẫn."
-            ;;
+    read -p "Lựa chọn: " choice
+    
+    case $choice in
+        0) show_main_menu ;;
+        *) echo "Lựa chọn không hợp lệ."; sleep 1; show_system_info ;;
     esac
 }
 
-# Hiển thị help
-show_help() {
-    echo -e "${BLUE}WPST Panel - WordPress Stack Tool${NC}"
+show_config_menu() {
+    clear
+    show_header "Cài đặt & Cấu hình"
+    
+    echo "1. Cấu hình FrankenPHP"
+    echo "2. Cấu hình MariaDB"
+    echo "3. Cấu hình SSL"
+    echo "4. Cấu hình Firewall"
+    echo "0. Quay lại"
     echo ""
-    echo "Cách sử dụng:"
-    echo "  wpst                 Mở dashboard chính"
-    echo "  wpst sites          Mở quản lý website"
-    echo "  wpst firewall       Mở quản lý firewall"
-    echo "  wpst update         Mở menu cập nhật"
-    echo "  wpst admin          Mở system admin"
+    read -p "Lựa chọn: " choice
+    
+    case $choice in
+        1) config_frankenphp ;;
+        2) config_mariadb ;;
+        3) config_ssl ;;
+        4) config_firewall ;;
+        0) show_main_menu ;;
+        *) echo "Lựa chọn không hợp lệ."; sleep 1; show_config_menu ;;
+    esac
+}
+
+show_backup_menu() {
+    clear
+    show_header "Backup & Restore"
+    
+    echo "1. Backup tất cả websites"
+    echo "2. Backup website cụ thể"
+    echo "3. Restore website"
+    echo "4. Quản lý backup"
+    echo "0. Quay lại"
     echo ""
-    echo "Tùy chọn:"
-    echo "  --help, -h          Hiển thị hướng dẫn"
-    echo "  --version, -v       Hiển thị phiên bản"
+    read -p "Lựa chọn: " choice
+    
+    case $choice in
+        1) backup_all_sites ;;
+        2) backup_specific_site ;;
+        3) restore_site ;;
+        4) manage_backups ;;
+        0) show_main_menu ;;
+        *) echo "Lựa chọn không hợp lệ."; sleep 1; show_backup_menu ;;
+    esac
+}
+
+show_logs_menu() {
+    clear
+    show_header "Logs & Monitoring"
+    
+    echo "1. Xem logs FrankenPHP"
+    echo "2. Xem logs MariaDB"
+    echo "3. Xem logs website"
+    echo "4. Monitoring hệ thống"
+    echo "0. Quay lại"
+    echo ""
+    read -p "Lựa chọn: " choice
+    
+    case $choice in
+        1) view_frankenphp_logs ;;
+        2) view_mariadb_logs ;;
+        3) view_website_logs ;;
+        4) system_monitoring ;;
+        0) show_main_menu ;;
+        *) echo "Lựa chọn không hợp lệ."; sleep 1; show_logs_menu ;;
+    esac
+}
+
+# Placeholder functions cho các tính năng
+add_new_site() {
+    echo "Thêm website mới - Đang phát triển..."
+    sleep 2
+    show_sites_menu
+}
+
+show_site_info() {
+    local domain="$1"
+    echo "Thông tin website $domain - Đang phát triển..."
+    sleep 2
+    show_site_details_menu "$domain"
+}
+
+toggle_site() {
+    local domain="$1"
+    echo "Bật/Tắt website $domain - Đang phát triển..."
+    sleep 2
+    show_site_details_menu "$domain"
+}
+
+edit_site_config() {
+    local domain="$1"
+    echo "Chỉnh sửa cấu hình $domain - Đang phát triển..."
+    sleep 2
+    show_site_details_menu "$domain"
+}
+
+manage_site_database() {
+    local domain="$1"
+    echo "Quản lý database $domain - Đang phát triển..."
+    sleep 2
+    show_site_details_menu "$domain"
+}
+
+backup_site() {
+    local domain="$1"
+    echo "Backup website $domain - Đang phát triển..."
+    sleep 2
+    show_site_details_menu "$domain"
+}
+
+delete_site() {
+    local domain="$1"
+    echo "Xóa website $domain - Đang phát triển..."
+    sleep 2
+    show_sites_menu
+}
+
+config_frankenphp() {
+    echo "Cấu hình FrankenPHP - Đang phát triển..."
+    sleep 2
+    show_config_menu
+}
+
+config_mariadb() {
+    echo "Cấu hình MariaDB - Đang phát triển..."
+    sleep 2
+    show_config_menu
+}
+
+config_ssl() {
+    echo "Cấu hình SSL - Đang phát triển..."
+    sleep 2
+    show_config_menu
+}
+
+config_firewall() {
+    echo "Cấu hình Firewall - Đang phát triển..."
+    sleep 2
+    show_config_menu
+}
+
+backup_all_sites() {
+    echo "Backup tất cả websites - Đang phát triển..."
+    sleep 2
+    show_backup_menu
+}
+
+backup_specific_site() {
+    echo "Backup website cụ thể - Đang phát triển..."
+    sleep 2
+    show_backup_menu
+}
+
+restore_site() {
+    echo "Restore website - Đang phát triển..."
+    sleep 2
+    show_backup_menu
+}
+
+manage_backups() {
+    echo "Quản lý backup - Đang phát triển..."
+    sleep 2
+    show_backup_menu
+}
+
+view_frankenphp_logs() {
+    echo "Xem logs FrankenPHP - Đang phát triển..."
+    sleep 2
+    show_logs_menu
+}
+
+view_mariadb_logs() {
+    echo "Xem logs MariaDB - Đang phát triển..."
+    sleep 2
+    show_logs_menu
+}
+
+view_website_logs() {
+    echo "Xem logs website - Đang phát triển..."
+    sleep 2
+    show_logs_menu
+}
+
+system_monitoring() {
+    echo "Monitoring hệ thống - Đang phát triển..."
+    sleep 2
+    show_logs_menu
+}
+
+# Header function
+show_header() {
+    local title="$1"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE} $title${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
 
-# Hiển thị version
-show_version() {
-    echo "WPST Panel phiên bản 1.0.0"
+# Main menu
+show_main_menu() {
+    clear
+    show_ascii_logo
+    echo ""
+    show_quick_stats
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "1. Quản lý Website"
+    echo "2. Thông tin Hệ thống"
+    echo "3. Cài đặt & Cấu hình"
+    echo "4. Backup & Restore"
+    echo "5. Logs & Monitoring"
+    echo "0. Thoát"
+    echo ""
+    read -p "Lựa chọn: " choice
+    
+    case $choice in
+        1) show_sites_menu ;;
+        2) show_system_info ;;
+        3) show_config_menu ;;
+        4) show_backup_menu ;;
+        5) show_logs_menu ;;
+        0) echo "Tạm biệt!"; exit 0 ;;
+        *) echo "Lựa chọn không hợp lệ."; sleep 1; show_main_menu ;;
+    esac
 }
 
-# Main function
-main() {
-    # Kiểm tra cài đặt
-    if [[ ! -d "$WPST_DIR" ]]; then
-        error "WPST Panel chưa được cài đặt. Vui lòng chạy script cài đặt trước."
-    fi
-    
-    check_root
-    
-    # Khởi tạo màn hình
-    init_screen
-    
-    # Xử lý tham số
-    handle_arguments "$1"
-}
-
-# Trap để cleanup khi exit
-trap cleanup EXIT
-
-# Chạy main function
-main "$@"
+# Start the application
+show_main_menu

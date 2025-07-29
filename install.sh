@@ -154,9 +154,17 @@ install_frankenphp() {
         PACKAGE_NAME="frankenphp_${VERSION_NUM}-1_${ARCH_NAME}.deb"
         DOWNLOAD_URL="https://github.com/php/frankenphp/releases/download/${FRANKENPHP_VERSION}/${PACKAGE_NAME}"
         
+        log "Downloading FrankenPHP package..."
         cd /tmp
-        wget "$DOWNLOAD_URL" -O "$PACKAGE_NAME"
-        dpkg -i "$PACKAGE_NAME" || apt install -f -y
+        if ! wget "$DOWNLOAD_URL" -O "$PACKAGE_NAME"; then
+            error "Không thể download FrankenPHP package."
+        fi
+        
+        log "Installing FrankenPHP package..."
+        if ! dpkg -i "$PACKAGE_NAME"; then
+            log "Fixing package dependencies..."
+            apt install -f -y || error "Không thể fix package dependencies."
+        fi
         
     elif [[ $OS == "rhel" ]]; then
         if [[ $ARCH_NAME == "amd64" ]]; then
@@ -167,14 +175,28 @@ install_frankenphp() {
         PACKAGE_NAME="frankenphp-${VERSION_NUM}-1.${RPM_ARCH}.rpm"
         DOWNLOAD_URL="https://github.com/php/frankenphp/releases/download/${FRANKENPHP_VERSION}/${PACKAGE_NAME}"
         
+        log "Downloading FrankenPHP package..."
         cd /tmp
-        wget "$DOWNLOAD_URL" -O "$PACKAGE_NAME"
-        $PKG_MANAGER install -y "$PACKAGE_NAME"
+        if ! wget "$DOWNLOAD_URL" -O "$PACKAGE_NAME"; then
+            error "Không thể download FrankenPHP package."
+        fi
+        
+        log "Installing FrankenPHP package..."
+        if ! $PKG_MANAGER install -y "$PACKAGE_NAME"; then
+            error "Không thể cài đặt FrankenPHP package."
+        fi
     fi
     
     # Kiểm tra cài đặt
+    log "Verifying FrankenPHP installation..."
     if ! command -v frankenphp >/dev/null 2>&1; then
-        error "Cài đặt FrankenPHP thất bại."
+        error "Cài đặt FrankenPHP thất bại - command không tìm thấy."
+    fi
+    
+    # Kiểm tra version
+    local installed_version=$(frankenphp version 2>/dev/null | head -1)
+    if [[ -n "$installed_version" ]]; then
+        log "FrankenPHP version: $installed_version"
     fi
     
     info "FrankenPHP đã được cài đặt thành công."
@@ -182,9 +204,16 @@ install_frankenphp() {
 
 # Nhập email cho SSL
 get_ssl_email() {
+    log "Bắt đầu nhập email SSL..."
+    
     while true; do
         echo -e "\n${BLUE}Nhập email để cấu hình SSL tự động (Let's Encrypt):${NC}"
         read -p "Email: " SSL_EMAIL
+        
+        # Kiểm tra nếu user nhấn Ctrl+C
+        if [[ $? -ne 0 ]]; then
+            error "Người dùng đã hủy quá trình cài đặt."
+        fi
         
         # Validate email
         if [[ $SSL_EMAIL =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
@@ -194,6 +223,8 @@ get_ssl_email() {
             warning "Email không hợp lệ. Vui lòng nhập lại."
         fi
     done
+    
+    log "Email SSL đã được nhập thành công: $SSL_EMAIL"
 }
 
 # Chọn phiên bản MariaDB
@@ -397,17 +428,104 @@ start_services() {
 install_wpst_script() {
     log "Cài đặt WPST Panel..."
     
-    # Download và cài đặt script chính (sẽ implement sau)
-    # Hiện tại tạo placeholder
-    cat > /usr/local/bin/wpst << 'EOF'
+    # Tạo thư mục WPST nếu chưa có
+    mkdir -p "$WPST_DIR"
+    
+    # Copy script chính từ thư mục hiện tại
+    if [[ -f "src/wpst" ]]; then
+        cp "src/wpst" "$WPST_DIR/wpst"
+        chmod +x "$WPST_DIR/wpst"
+        log "Đã copy script chính từ src/wpst"
+    else
+        # Tạo script placeholder nếu không có file gốc
+        cat > "$WPST_DIR/wpst" << 'EOF'
 #!/bin/bash
-echo "WPST Panel - Đang phát triển..."
-echo "Chạy từ: /var/www/wpst-script"
+# WPST Panel - WordPress Stack Tool
+# Phiên bản: 1.0.0
+
+# Load common functions
+source /var/www/wpst-script/lib/common.sh
+
+# Main menu
+show_main_menu() {
+    clear
+    show_ascii_logo
+    echo ""
+    show_quick_stats
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "1. Quản lý Website"
+    echo "2. Thông tin Hệ thống"
+    echo "3. Cài đặt & Cấu hình"
+    echo "4. Backup & Restore"
+    echo "5. Logs & Monitoring"
+    echo "0. Thoát"
+    echo ""
+    read -p "Lựa chọn: " choice
+    
+    case $choice in
+        1) show_sites_menu ;;
+        2) show_system_info ;;
+        3) show_config_menu ;;
+        4) show_backup_menu ;;
+        5) show_logs_menu ;;
+        0) echo "Tạm biệt!"; exit 0 ;;
+        *) echo "Lựa chọn không hợp lệ."; sleep 1; show_main_menu ;;
+    esac
+}
+
+# Placeholder functions
+show_sites_menu() {
+    echo "Quản lý Website - Đang phát triển..."
+    sleep 2
+    show_main_menu
+}
+
+show_system_info() {
+    echo "Thông tin Hệ thống - Đang phát triển..."
+    sleep 2
+    show_main_menu
+}
+
+show_config_menu() {
+    echo "Cài đặt & Cấu hình - Đang phát triển..."
+    sleep 2
+    show_main_menu
+}
+
+show_backup_menu() {
+    echo "Backup & Restore - Đang phát triển..."
+    sleep 2
+    show_main_menu
+}
+
+show_logs_menu() {
+    echo "Logs & Monitoring - Đang phát triển..."
+    sleep 2
+    show_main_menu
+}
+
+# Start the application
+show_main_menu
 EOF
+        log "Đã tạo script placeholder"
+    fi
     
-    chmod +x /usr/local/bin/wpst
+    # Tạo symlink để có thể chạy từ bất kỳ đâu
+    ln -sf "$WPST_DIR/wpst" /usr/local/bin/wpst
     
-    info "WPST Panel đã được cài đặt."
+    # Copy thư mục lib nếu có
+    if [[ -d "src/lib" ]]; then
+        cp -r src/lib "$WPST_DIR/"
+        log "Đã copy thư mục lib"
+    else
+        # Tạo thư mục lib cơ bản
+        mkdir -p "$WPST_DIR/lib"
+        log "Đã tạo thư mục lib"
+    fi
+    
+    info "WPST Panel đã được cài đặt tại $WPST_DIR"
 }
 
 # Hiển thị thông tin hoàn thành
@@ -435,6 +553,9 @@ show_completion_info() {
 
 # Main installation process
 main() {
+    # Trap để handle Ctrl+C
+    trap 'echo -e "\n${RED}Đã hủy cài đặt.${NC}"; exit 1' INT TERM
+    
     echo -e "${BLUE}"
     cat << 'EOF'
  _    _ _____   _____ _______   _____                 _ 
@@ -450,18 +571,59 @@ EOF
     
     log "Bắt đầu cài đặt WPST Panel..."
     
+    # Thực hiện từng bước với error handling
+    local step=1
+    local total_steps=12
+    
+    log "Step $step/$total_steps: Kiểm tra quyền root..."
     check_root
+    ((step++))
+    
+    log "Step $step/$total_steps: Phát hiện hệ thống..."
     detect_system
+    ((step++))
+    
+    log "Step $step/$total_steps: Kiểm tra điều kiện tiên quyết..."
     check_prerequisites
+    ((step++))
+    
+    log "Step $step/$total_steps: Cài đặt dependencies..."
     install_dependencies
+    ((step++))
+    
+    log "Step $step/$total_steps: Cài đặt FrankenPHP..."
     install_frankenphp
+    ((step++))
+    
+    log "Step $step/$total_steps: Nhập email SSL..."
     get_ssl_email
+    ((step++))
+    
+    log "Step $step/$total_steps: Chọn phiên bản MariaDB..."
     select_mariadb_version
+    ((step++))
+    
+    log "Step $step/$total_steps: Cài đặt MariaDB..."
     install_mariadb
+    ((step++))
+    
+    log "Step $step/$total_steps: Bảo mật MariaDB..."
     secure_mariadb
+    ((step++))
+    
+    log "Step $step/$total_steps: Tạo cấu trúc thư mục..."
     create_directories
+    ((step++))
+    
+    log "Step $step/$total_steps: Tạo cấu hình FrankenPHP..."
     create_frankenphp_config
+    ((step++))
+    
+    log "Step $step/$total_steps: Khởi động dịch vụ..."
     start_services
+    ((step++))
+    
+    log "Step $step/$total_steps: Cài đặt WPST script..."
     install_wpst_script
     
     show_completion_info
