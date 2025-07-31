@@ -839,6 +839,12 @@ setup_tinyfilemanager() {
         echo "$tfm_files" | while read file; do
             echo -e "   ${GREEN}$(basename "$file")${NC}"
         done
+        
+        # Hiển thị file config
+        local config_file="$public_dir/config.php"
+        if [[ -f "$config_file" ]]; then
+            echo -e "📁 File config: ${GREEN}config.php${NC}"
+        fi
         echo ""
         
         # Hiển thị thông tin đăng nhập
@@ -2141,10 +2147,18 @@ install_tinyfilemanager() {
     
     info "Đang tải TinyFileManager..."
     
-    # Tạo tên file ngẫu nhiên
-    local random_suffix=$(openssl rand -hex 2)
+    # Tạo tên file ngẫu nhiên (tăng từ 4 lên 8 ký tự)
+    local random_suffix=$(openssl rand -hex 4)
     local filename="tinyfilemanager_${random_suffix}.php"
     local filepath="$public_dir/$filename"
+    
+    # Tạo mật khẩu ngẫu nhiên
+    local admin_password=$(openssl rand -base64 12 | tr -d "=+/" | cut -c1-12)
+    local user_password=$(openssl rand -base64 12 | tr -d "=+/" | cut -c1-12)
+    
+    # Mã hóa mật khẩu bằng PHP
+    local admin_hash=$(frankenphp php-cli -r "echo password_hash('$admin_password', PASSWORD_DEFAULT);")
+    local user_hash=$(frankenphp php-cli -r "echo password_hash('$user_password', PASSWORD_DEFAULT);")
     
     # Tải file từ GitHub
     if ! curl -s -o "$filepath" "https://raw.githubusercontent.com/prasathmani/tinyfilemanager/master/tinyfilemanager.php"; then
@@ -2152,20 +2166,37 @@ install_tinyfilemanager() {
         return 1
     fi
     
-    chown frankenphp:frankenphp "$filepath"
-    chmod 644 "$filepath"
+    # Tạo file config.php
+    local config_filename="config.php"
+    local config_filepath="$public_dir/$config_filename"
+    
+    cat > "$config_filepath" << EOF
+<?php
+\$auth_users = array(
+    'admin' => '$admin_hash',
+    'user' => '$user_hash'
+);
+\$readonly_users = array(
+    'user'
+);
+?>
+EOF
+    
+    chown frankenphp:frankenphp "$filepath" "$config_filepath"
+    chmod 644 "$filepath" "$config_filepath"
     
     success "TinyFileManager đã được cài đặt!"
     echo ""
-    echo -e "${BLUE}🔐 THÔNG TIN ĐĂNG NHẬP (Mặc định)${NC}"
+    echo -e "${BLUE}🔐 THÔNG TIN ĐĂNG NHẬP${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo -e "Username: ${GREEN}admin${NC} (Full access)"
-    echo -e "Password: ${GREEN}admin@123${NC}"
+    echo -e "Password: ${GREEN}$admin_password${NC}"
     echo ""
     echo -e "Username: ${GREEN}user${NC} (View only)"
-    echo -e "Password: ${GREEN}12345${NC}"
+    echo -e "Password: ${GREEN}$user_password${NC}"
     echo ""
     echo -e "🔗 Link truy cập: ${GREEN}https://$domain/$filename${NC}"
+    echo -e "📁 File config: ${GREEN}https://$domain/$config_filename${NC}"
     echo ""
     echo -e "${YELLOW}⚠️  Lưu ý: File sẽ tự động xóa sau 1 giờ nếu không tắt.${NC}"
     echo ""
@@ -2177,9 +2208,13 @@ install_tinyfilemanager() {
             rm -f "$filepath"
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] TinyFileManager $filename đã được tự động xóa" >> /tmp/tfm_cleanup.log
         fi
+        if [[ -f "$config_filepath" ]]; then
+            rm -f "$config_filepath"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Config config.php đã được tự động xóa" >> /tmp/tfm_cleanup.log
+        fi
     ) &
     local cleanup_pid=$!
-    echo "$cleanup_pid:$filepath" >> /tmp/tfm_jobs.txt
+    echo "$cleanup_pid:$filepath:$config_filepath" >> /tmp/tfm_jobs.txt
     
     read -p "Nhấn Enter để quay lại..."
     setup_tinyfilemanager "$domain"
@@ -2192,8 +2227,9 @@ remove_tinyfilemanager() {
     # Dừng tất cả background jobs liên quan đến auto-delete
     jobs -p | xargs -r kill 2>/dev/null || true
     
-    # Xóa tất cả file tinyfilemanager
+    # Xóa tất cả file tinyfilemanager và config
     find "$public_dir" -name "tinyfilemanager_*.php" -delete
+    rm -f "$public_dir/config.php"
     
     success "TinyFileManager đã được tắt!"
     echo ""
@@ -2205,7 +2241,7 @@ remove_tinyfilemanager() {
 cleanup_tfm_jobs() {
     # Dọn dẹp các jobs đã hoàn thành
     if [[ -f /tmp/tfm_jobs.txt ]]; then
-        while IFS=: read -r pid filepath; do
+        while IFS=: read -r pid filepath config_filepath; do
             if [[ -n "$pid" && -n "$filepath" ]]; then
                 # Kiểm tra xem process còn chạy không
                 if ! kill -0 "$pid" 2>/dev/null; then
@@ -2215,6 +2251,12 @@ cleanup_tfm_jobs() {
                 # Kiểm tra xem file còn tồn tại không
                 if [[ ! -f "$filepath" ]]; then
                     # File đã bị xóa, dừng process
+                    kill "$pid" 2>/dev/null || true
+                    sed -i "/^$pid:/d" /tmp/tfm_jobs.txt
+                fi
+                # Kiểm tra xem config file còn tồn tại không
+                if [[ -n "$config_filepath" && ! -f "$config_filepath" ]]; then
+                    # Config file đã bị xóa, dừng process
                     kill "$pid" 2>/dev/null || true
                     sed -i "/^$pid:/d" /tmp/tfm_jobs.txt
                 fi
