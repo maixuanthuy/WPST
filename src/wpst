@@ -1133,12 +1133,376 @@ delete_site() {
 
 # FrankenPHP tuning dashboard
 show_frankenphp_tuning_dashboard() {
+    while true; do
+        clear
+        show_header "FrankenPHP Tuning"
+        
+        echo -e "${BLUE}🔧 TÙY CHỌN CẤU HÌNH${NC}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "1. Cấu hình Caddyfile (FrankenPHP)"
+        echo "2. Cấu hình PHP.ini"
+        echo "3. Restart FrankenPHP"
+        echo "4. Backup cấu hình hiện tại"
+        echo "5. Restore cấu hình từ backup"
+        echo ""
+        echo "0. Quay lại menu chính"
+        echo "q. Thoát"
+        echo ""
+        
+        read -p "Lựa chọn: " choice
+        
+        case $choice in
+            1)
+                configure_caddyfile
+                ;;
+            2)
+                configure_php_ini
+                ;;
+            3)
+                restart_frankenphp
+                ;;
+            4)
+                backup_configuration
+                ;;
+            5)
+                restore_configuration
+                ;;
+            0)
+                show_main_dashboard
+                ;;
+            q|Q)
+                echo -e "${GREEN}Cảm ơn bạn đã sử dụng WPST Panel!${NC}"
+                exit 0
+                ;;
+            *)
+                warning "Lựa chọn không hợp lệ."
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# Configure Caddyfile
+configure_caddyfile() {
     clear
-    show_header "FrankenPHP Tuning"
-    echo -e "${YELLOW}Tính năng này sẽ được phát triển sau.${NC}"
+    show_header "Cấu hình Caddyfile"
+    
+    local caddyfile="/etc/frankenphp/Caddyfile"
+    
+    if [[ ! -f "$caddyfile" ]]; then
+        error "Không tìm thấy file Caddyfile"
+        return
+    fi
+    
+    # Parse current configuration
+    local num_threads=$(grep -o "num_threads [0-9]*" "$caddyfile" | awk '{print $2}' || echo "4")
+    local max_threads=$(grep -o "max_threads [a-z]*" "$caddyfile" | awk '{print $2}' || echo "auto")
+    local max_wait_time=$(grep -o "max_wait_time [0-9]*" "$caddyfile" | awk '{print $2}' || echo "10")
+    
+    echo -e "${BLUE}📋 CẤU HÌNH HIỆN TẠI${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "num_threads: ${GREEN}$num_threads${NC}"
+    echo -e "max_threads: ${GREEN}$max_threads${NC}"
+    echo -e "max_wait_time: ${GREEN}$max_wait_time${NC}"
+    echo ""
+    
+    echo -e "${BLUE}🔧 CHỈNH SỬA CẤU HÌNH${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Input new values
+    echo -e "Nhập số threads (hiện tại: $num_threads):"
+    read -p "num_threads: " new_num_threads
+    new_num_threads=${new_num_threads:-$num_threads}
+    
+    echo -e "Nhập max threads (hiện tại: $max_threads):"
+    read -p "max_threads: " new_max_threads
+    new_max_threads=${new_max_threads:-$max_threads}
+    
+    echo -e "Nhập max wait time (hiện tại: $max_wait_time):"
+    read -p "max_wait_time: " new_max_wait_time
+    new_max_wait_time=${new_max_wait_time:-$max_wait_time}
+    
+    # Validate inputs
+    if ! [[ "$new_num_threads" =~ ^[0-9]+$ ]] || [[ $new_num_threads -lt 1 ]]; then
+        warning "num_threads phải là số nguyên dương"
+        sleep 2
+        configure_caddyfile
+        return
+    fi
+    
+    if [[ "$new_max_threads" != "auto" ]] && ! [[ "$new_max_threads" =~ ^[0-9]+$ ]]; then
+        warning "max_threads phải là 'auto' hoặc số nguyên"
+        sleep 2
+        configure_caddyfile
+        return
+    fi
+    
+    if ! [[ "$new_max_wait_time" =~ ^[0-9]+$ ]] || [[ $new_max_wait_time -lt 1 ]]; then
+        warning "max_wait_time phải là số nguyên dương"
+        sleep 2
+        configure_caddyfile
+        return
+    fi
+    
+    # Backup current config
+    cp "$caddyfile" "${caddyfile}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Update Caddyfile
+    cat > "$caddyfile" << EOF
+{
+	frankenphp {
+		num_threads $new_num_threads
+		max_threads $new_max_threads
+		max_wait_time $new_max_wait_time
+	}
+}
+
+import /var/www/sites/*/Caddyfile
+EOF
+    
+    chown frankenphp:frankenphp "$caddyfile"
+    chmod 644 "$caddyfile"
+    
+    success "Caddyfile đã được cập nhật!"
+    echo ""
+    echo -e "${YELLOW}Lưu ý: Cần restart FrankenPHP để áp dụng thay đổi.${NC}"
     echo ""
     read -p "Nhấn Enter để quay lại..."
-    show_main_dashboard
+}
+
+# Configure PHP.ini
+configure_php_ini() {
+    clear
+    show_header "Cấu hình PHP.ini"
+    
+    local php_ini="/etc/frankenphp/php.ini"
+    
+    if [[ ! -f "$php_ini" ]]; then
+        error "Không tìm thấy file php.ini"
+        return
+    fi
+    
+    # Parse current configuration
+    local memory_limit=$(grep "^memory_limit" "$php_ini" | cut -d'=' -f2 | tr -d ' ' || echo "128M")
+    local max_execution_time=$(grep "^max_execution_time" "$php_ini" | cut -d'=' -f2 | tr -d ' ' || echo "300")
+    local upload_max_filesize=$(grep "^upload_max_filesize" "$php_ini" | cut -d'=' -f2 | tr -d ' ' || echo "128M")
+    local post_max_size=$(grep "^post_max_size" "$php_ini" | cut -d'=' -f2 | tr -d ' ' || echo "256M")
+    local opcache_memory=$(grep "^opcache.memory_consumption" "$php_ini" | cut -d'=' -f2 | tr -d ' ' || echo "128")
+    
+    echo -e "${BLUE}📋 CẤU HÌNH HIỆN TẠI${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "memory_limit: ${GREEN}$memory_limit${NC}"
+    echo -e "max_execution_time: ${GREEN}$max_execution_time${NC}"
+    echo -e "upload_max_filesize: ${GREEN}$upload_max_filesize${NC}"
+    echo -e "post_max_size: ${GREEN}$post_max_size${NC}"
+    echo -e "opcache.memory_consumption: ${GREEN}$opcache_memory${NC}"
+    echo ""
+    
+    echo -e "${BLUE}🔧 CHỈNH SỬA CẤU HÌNH${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Input new values
+    echo -e "Nhập memory limit (hiện tại: $memory_limit):"
+    read -p "memory_limit: " new_memory_limit
+    new_memory_limit=${new_memory_limit:-$memory_limit}
+    
+    echo -e "Nhập max execution time (hiện tại: $max_execution_time):"
+    read -p "max_execution_time: " new_max_execution_time
+    new_max_execution_time=${new_max_execution_time:-$max_execution_time}
+    
+    echo -e "Nhập upload max filesize (hiện tại: $upload_max_filesize):"
+    read -p "upload_max_filesize: " new_upload_max_filesize
+    new_upload_max_filesize=${new_upload_max_filesize:-$upload_max_filesize}
+    
+    echo -e "Nhập post max size (hiện tại: $post_max_size):"
+    read -p "post_max_size: " new_post_max_size
+    new_post_max_size=${new_post_max_size:-$post_max_size}
+    
+    echo -e "Nhập opcache memory consumption (hiện tại: $opcache_memory):"
+    read -p "opcache.memory_consumption: " new_opcache_memory
+    new_opcache_memory=${new_opcache_memory:-$opcache_memory}
+    
+    # Validate inputs
+    if ! [[ "$new_memory_limit" =~ ^[0-9]+[KMG]?$ ]]; then
+        warning "memory_limit không hợp lệ (VD: 128M, 256M)"
+        sleep 2
+        configure_php_ini
+        return
+    fi
+    
+    if ! [[ "$new_max_execution_time" =~ ^[0-9]+$ ]]; then
+        warning "max_execution_time phải là số nguyên"
+        sleep 2
+        configure_php_ini
+        return
+    fi
+    
+    if ! [[ "$new_upload_max_filesize" =~ ^[0-9]+[KMG]?$ ]]; then
+        warning "upload_max_filesize không hợp lệ (VD: 128M, 256M)"
+        sleep 2
+        configure_php_ini
+        return
+    fi
+    
+    if ! [[ "$new_post_max_size" =~ ^[0-9]+[KMG]?$ ]]; then
+        warning "post_max_size không hợp lệ (VD: 256M, 512M)"
+        sleep 2
+        configure_php_ini
+        return
+    fi
+    
+    if ! [[ "$new_opcache_memory" =~ ^[0-9]+$ ]]; then
+        warning "opcache.memory_consumption phải là số nguyên"
+        sleep 2
+        configure_php_ini
+        return
+    fi
+    
+    # Backup current config
+    cp "$php_ini" "${php_ini}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Update specific values in php.ini
+    sed -i "s/^memory_limit = .*/memory_limit = $new_memory_limit/" "$php_ini"
+    sed -i "s/^max_execution_time = .*/max_execution_time = $new_max_execution_time/" "$php_ini"
+    sed -i "s/^upload_max_filesize = .*/upload_max_filesize = $new_upload_max_filesize/" "$php_ini"
+    sed -i "s/^post_max_size = .*/post_max_size = $new_post_max_size/" "$php_ini"
+    sed -i "s/^opcache.memory_consumption=.*/opcache.memory_consumption=$new_opcache_memory/" "$php_ini"
+    
+    chown frankenphp:frankenphp "$php_ini"
+    chmod 644 "$php_ini"
+    
+    success "PHP.ini đã được cập nhật!"
+    echo ""
+    echo -e "${YELLOW}Lưu ý: Cần restart FrankenPHP để áp dụng thay đổi.${NC}"
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+}
+
+# Backup configuration
+backup_configuration() {
+    clear
+    show_header "Backup Cấu hình"
+    
+    local backup_dir="$WPST_DIR/backups"
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local backup_name="config_backup_$timestamp"
+    local backup_path="$backup_dir/$backup_name"
+    
+    mkdir -p "$backup_path"
+    
+    # Backup Caddyfile
+    if [[ -f "/etc/frankenphp/Caddyfile" ]]; then
+        cp "/etc/frankenphp/Caddyfile" "$backup_path/Caddyfile"
+        success "Đã backup Caddyfile"
+    fi
+    
+    # Backup php.ini
+    if [[ -f "/etc/frankenphp/php.ini" ]]; then
+        cp "/etc/frankenphp/php.ini" "$backup_path/php.ini"
+        success "Đã backup php.ini"
+    fi
+    
+    # Create info file
+    cat > "$backup_path/info.txt" << EOF
+Backup created: $(date)
+Backup name: $backup_name
+Files:
+- Caddyfile
+- php.ini
+EOF
+    
+    success "Backup cấu hình hoàn thành: $backup_name"
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+}
+
+# Restore configuration
+restore_configuration() {
+    clear
+    show_header "Restore Cấu hình"
+    
+    local backup_dir="$WPST_DIR/backups"
+    
+    if [[ ! -d "$backup_dir" ]]; then
+        warning "Không có thư mục backup nào."
+        read -p "Nhấn Enter để quay lại..."
+        return
+    fi
+    
+    # List available backups
+    local backups=()
+    for backup in "$backup_dir"/*; do
+        if [[ -d "$backup" ]]; then
+            backups+=("$(basename "$backup")")
+        fi
+    done
+    
+    if [[ ${#backups[@]} -eq 0 ]]; then
+        warning "Không có backup nào."
+        read -p "Nhấn Enter để quay lại..."
+        return
+    fi
+    
+    echo -e "${BLUE}📦 DANH SÁCH BACKUP${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    for i in "${!backups[@]}"; do
+        echo "$((i+1)). ${backups[i]}"
+        if [[ -f "$backup_dir/${backups[i]}/info.txt" ]]; then
+            echo "   $(cat "$backup_dir/${backups[i]}/info.txt" | head -1)"
+        fi
+    done
+    
+    echo ""
+    echo "0. Quay lại"
+    echo ""
+    
+    read -p "Chọn backup để restore: " choice
+    
+    if [[ "$choice" == "0" ]]; then
+        return
+    fi
+    
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [[ $choice -lt 1 ]] || [[ $choice -gt ${#backups[@]} ]]; then
+        warning "Lựa chọn không hợp lệ."
+        sleep 2
+        restore_configuration
+        return
+    fi
+    
+    local selected_backup="${backups[$((choice-1))]}"
+    local backup_path="$backup_dir/$selected_backup"
+    
+    echo ""
+    echo -e "${RED}CẢNH BÁO: Restore sẽ ghi đè cấu hình hiện tại!${NC}"
+    echo ""
+    
+    if ! read_confirm "Bạn có chắc chắn muốn restore backup $selected_backup?" "n"; then
+        info "Đã hủy restore."
+        sleep 1
+        return
+    fi
+    
+    # Restore files
+    if [[ -f "$backup_path/Caddyfile" ]]; then
+        cp "$backup_path/Caddyfile" "/etc/frankenphp/Caddyfile"
+        chown frankenphp:frankenphp "/etc/frankenphp/Caddyfile"
+        chmod 644 "/etc/frankenphp/Caddyfile"
+        success "Đã restore Caddyfile"
+    fi
+    
+    if [[ -f "$backup_path/php.ini" ]]; then
+        cp "$backup_path/php.ini" "/etc/frankenphp/php.ini"
+        chown frankenphp:frankenphp "/etc/frankenphp/php.ini"
+        chmod 644 "/etc/frankenphp/php.ini"
+        success "Đã restore php.ini"
+    fi
+    
+    success "Restore cấu hình hoàn thành!"
+    echo ""
+    echo -e "${YELLOW}Lưu ý: Cần restart FrankenPHP để áp dụng thay đổi.${NC}"
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
 }
 
 # Update dashboard
@@ -2160,9 +2524,15 @@ install_tinyfilemanager() {
     local admin_hash=$(frankenphp php-cli -r "echo password_hash('$admin_password', PASSWORD_DEFAULT);")
     local user_hash=$(frankenphp php-cli -r "echo password_hash('$user_password', PASSWORD_DEFAULT);")
     
-    # Tải file từ GitHub
-    if ! curl -s -o "$filepath" "https://raw.githubusercontent.com/prasathmani/tinyfilemanager/master/tinyfilemanager.php"; then
-        error "Không thể tải TinyFileManager"
+    # Copy file từ local repository
+    local tfm_source="$WPST_DIR/lib/tinyfilemanager.php"
+    if [[ ! -f "$tfm_source" ]]; then
+        error "Không tìm thấy file TinyFileManager trong repository local"
+        return 1
+    fi
+    
+    if ! cp "$tfm_source" "$filepath"; then
+        error "Không thể copy TinyFileManager"
         return 1
     fi
     
@@ -2617,9 +2987,15 @@ install_adminneo() {
     local filename="adminneo_${random_suffix}.php"
     local filepath="$public_dir/$filename"
     
-    # Tải file từ Adminneo
-    if ! curl -s -o "$filepath" "https://www.adminneo.org/files/5.0.0/mysql__default-blue/adminneo-5.0.0.php"; then
-        error "Không thể tải Adminneo"
+    # Copy file từ local repository
+    local adminneo_source="$WPST_DIR/lib/adminneo.php"
+    if [[ ! -f "$adminneo_source" ]]; then
+        error "Không tìm thấy file Adminneo trong repository local"
+        return 1
+    fi
+    
+    if ! cp "$adminneo_source" "$filepath"; then
+        error "Không thể copy Adminneo"
         return 1
     fi
     

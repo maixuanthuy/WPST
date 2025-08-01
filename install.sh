@@ -309,54 +309,95 @@ create_frankenphp_config() {
     # Create main Caddyfile
     cat > /etc/frankenphp/Caddyfile << EOF
 {
-    frankenphp
+	frankenphp {
+		num_threads 4
+		max_threads auto
+		max_wait_time 10
+	}
 }
 
-# Import site configurations
-import $SITES_DIR/*/Caddyfile
+import /var/www/sites/*/Caddyfile
 EOF
 
     # Create optimized php.ini
     cat > /etc/frankenphp/php.ini << 'EOF'
 ; ########### CẤU HÌNH CƠ BẢN ###########
-memory_limit = 256M
+memory_limit = 128M
 max_execution_time = 300
 max_input_time = 300
+default_socket_timeout = 120
 date.timezone = Asia/Ho_Chi_Minh
 
 ; ########### UPLOAD FILES ###########
-upload_max_filesize = 256M
-post_max_size = 512M
-max_file_uploads = 20
-max_input_vars = 10000
+upload_max_filesize = 128M
+post_max_size = 256M
+max_file_uploads = 10
+max_input_vars = 20000
+file_uploads = On
 
-; ########### OPCODE CACHE ###########
+; ########### OUTPUT & BUFFER ###########
+output_buffering = 4096
+implicit_flush = Off
+zlib.output_compression = On
+zlib.output_compression_level = 6
+
+; ########### SESSION ###########
+session.save_handler = files
+session.save_path = "/tmp"
+session.gc_probability = 1
+session.gc_divisor = 1000
+session.gc_maxlifetime = 1440
+session.cookie_httponly = On
+session.cookie_secure = Off
+session.use_strict_mode = On
+session.cookie_samesite = "Lax"
+
+; ########### OPCODE CACHE (QUAN TRỌNG) ###########
 opcache.enable=1
-opcache.memory_consumption=512
-opcache.interned_strings_buffer=128
-opcache.max_accelerated_files=50000
+opcache.memory_consumption=128
+opcache.interned_strings_buffer=16
+opcache.max_accelerated_files=4000
+opcache.max_wasted_percentage=10
 opcache.validate_timestamps=1
-opcache.revalidate_freq=2
+opcache.revalidate_freq=5
 opcache.fast_shutdown=1
 opcache.enable_cli=0
 opcache.jit=1254
-opcache.jit_buffer_size=128M
+opcache.jit_buffer_size=32M
 opcache.save_comments=0
-opcache.enable_file_override=1
+opcache.file_update_protection=2
+opcache.huge_code_pages=0
+opcache.preload_user = frankenphp
 
 ; ########### REALPATH CACHE ###########
-realpath_cache_size = 32M
-realpath_cache_ttl = 300
+realpath_cache_size = 16M
+realpath_cache_ttl = 600
 
 ; ########### WORDPRESS OPTIMIZATION ###########
 disable_functions = exec,passthru,shell_exec,system
 expose_php = Off
+allow_url_fopen = On
+allow_url_include = Off
+enable_dl = Off
+cgi.fix_pathinfo = 0
 
-; ########### SESSION & CONCURRENT ###########
-session.save_handler = files
-session.save_path = "/tmp"
-session.gc_probability = 1
-session.gc_divisor = 100
+; ########### DATABASE ###########
+mysqli.max_persistent = 10
+mysqli.max_links = 20
+mysqli.default_port = 3306
+mysqli.reconnect = Off
+
+; ########### PERFORMANCE TUNING ###########
+max_input_nesting_level = 64
+pcre.backtrack_limit = 1000000
+pcre.recursion_limit = 100000
+
+; ########### WORDPRESS SPECIFIC ###########
+user_ini.filename = ".user.ini"
+user_ini.cache_ttl = 300
+
+; ########### APCU ###########
+apc.shm_size = 128M
 EOF
 
     # Set permissions
@@ -498,6 +539,14 @@ EOF
         # Tạo thư mục lib cơ bản
         mkdir -p "$WPST_DIR/lib"
         log "Đã tạo thư mục lib"
+    fi
+    
+    # Đảm bảo quyền cho lib files
+    if [[ -d "$WPST_DIR/lib" ]]; then
+        chown -R frankenphp:frankenphp "$WPST_DIR/lib"
+        find "$WPST_DIR/lib" -type f -exec chmod 644 {} \;
+        find "$WPST_DIR/lib" -type d -exec chmod 755 {} \;
+        log "Đã phân quyền thư mục lib"
     fi
     
     info "WPST Panel đã được cài đặt tại $WPST_DIR"
