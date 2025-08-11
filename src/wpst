@@ -528,7 +528,6 @@ show_sites_dashboard() {
     echo "p. Update Permission FrankenPHP"
     echo "u. Update FrankenPHP"
     echo "0. Thoát"
-    echo "q. Thoát"
     
     echo ""
     echo -e "${CYAN}💡 THÔNG TIN:${NC}"
@@ -566,10 +565,6 @@ show_sites_dashboard() {
             update_frankenphp
             ;;
         0)
-            echo -e "${GREEN}Cảm ơn bạn đã sử dụng WPST Panel!${NC}"
-            exit 0
-            ;;
-        q|Q)
             echo -e "${GREEN}Cảm ơn bạn đã sử dụng WPST Panel!${NC}"
             exit 0
             ;;
@@ -619,7 +614,7 @@ show_single_site_dashboard() {
         echo "2. 8G Firewall - (ĐANG TẮT)"
     fi
     
-    echo "3. Cài đặt SSL thủ công"
+    echo "3. Cài đặt SSL"
     
     # Kiểm tra trạng thái TinyFileManager
     local tinyfilemanager_files=$(find "$public_dir" -name "tinyfilemanager_*.php" 2>/dev/null | wc -l)
@@ -629,7 +624,7 @@ show_single_site_dashboard() {
         echo "4. TinyFileManager - (ĐANG TẮT)"
     fi
     
-    echo "5. Database"
+    echo "5. Quản lý Database"
     echo "6. Backup & Restore"
     
     # Hiển thị menu bật/tắt động
