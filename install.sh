@@ -4,7 +4,7 @@
 # Phiên bản: 1.0.0
 # Tác giả: WPST Team
 
-set -eE
+set -e
 
 # Trap function để handle lỗi
 error_handler() {
@@ -218,8 +218,15 @@ confirm_installation() {
 install_dependencies() {
     progress "Cài đặt các gói phụ thuộc..."
     
-    apt update >/dev/null 2>&1
-    apt install -y curl wget gnupg2 software-properties-common lsb-release ca-certificates apt-transport-https dirmngr >/dev/null 2>&1
+    # Update package list
+    if ! apt update >/dev/null 2>&1; then
+        error "Không thể cập nhật danh sách gói."
+    fi
+    
+    # Install dependencies
+    if ! apt install -y curl wget gnupg2 software-properties-common lsb-release ca-certificates apt-transport-https dirmngr >/dev/null 2>&1; then
+        error "Không thể cài đặt các gói phụ thuộc."
+    fi
     
     success "Dependencies đã được cài đặt"
 }
@@ -272,7 +279,9 @@ install_mariadb() {
     progress "Cài đặt MariaDB $MARIADB_VERSION..."
     
     # Add MariaDB repository
-    curl -fsSL https://mariadb.org/mariadb_release_signing_key.asc | gpg --dearmor -o /usr/share/keyrings/mariadb-keyring.gpg >/dev/null 2>&1
+    if ! curl -fsSL https://mariadb.org/mariadb_release_signing_key.asc | gpg --dearmor -o /usr/share/keyrings/mariadb-keyring.gpg >/dev/null 2>&1; then
+        error "Không thể tải MariaDB signing key."
+    fi
     
     OS_CODENAME=$(lsb_release -cs)
     
@@ -283,12 +292,22 @@ install_mariadb() {
         echo "deb [signed-by=/usr/share/keyrings/mariadb-keyring.gpg] https://mariadb.mirror.liquidtelecom.com/repo/$MARIADB_VERSION/debian $OS_CODENAME main" > /etc/apt/sources.list.d/mariadb.list
     fi
     
-    apt update >/dev/null 2>&1
-    DEBIAN_FRONTEND=noninteractive apt install -y mariadb-server mariadb-client >/dev/null 2>&1
+    if ! apt update >/dev/null 2>&1; then
+        error "Không thể cập nhật danh sách gói MariaDB."
+    fi
+    
+    if ! DEBIAN_FRONTEND=noninteractive apt install -y mariadb-server mariadb-client >/dev/null 2>&1; then
+        error "Không thể cài đặt MariaDB."
+    fi
     
     # Start và enable MariaDB
-    systemctl start mariadb >/dev/null 2>&1
-    systemctl enable mariadb >/dev/null 2>&1
+    if ! systemctl start mariadb >/dev/null 2>&1; then
+        error "Không thể khởi động MariaDB service."
+    fi
+    
+    if ! systemctl enable mariadb >/dev/null 2>&1; then
+        warning "Không thể enable MariaDB service."
+    fi
     
     success "MariaDB đã được cài đặt và khởi động"
 }
@@ -301,19 +320,29 @@ secure_mariadb() {
     DB_ROOT_PASSWORD=$(openssl rand -base64 32)
     
     # Set root password
-    mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_ROOT_PASSWORD';" >/dev/null 2>&1
+    if ! mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_ROOT_PASSWORD';" >/dev/null 2>&1; then
+        error "Không thể đặt mật khẩu root cho MariaDB."
+    fi
     
     # Remove anonymous users
-    mysql -u root -p"$DB_ROOT_PASSWORD" -e "DELETE FROM mysql.user WHERE User='';" >/dev/null 2>&1
+    if ! mysql -u root -p"$DB_ROOT_PASSWORD" -e "DELETE FROM mysql.user WHERE User='';" >/dev/null 2>&1; then
+        warning "Không thể xóa anonymous users."
+    fi
     
     # Remove remote root
-    mysql -u root -p"$DB_ROOT_PASSWORD" -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');" >/dev/null 2>&1
+    if ! mysql -u root -p"$DB_ROOT_PASSWORD" -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');" >/dev/null 2>&1; then
+        warning "Không thể xóa remote root users."
+    fi
     
     # Remove test database
-    mysql -u root -p"$DB_ROOT_PASSWORD" -e "DROP DATABASE IF EXISTS test;" >/dev/null 2>&1
+    if ! mysql -u root -p"$DB_ROOT_PASSWORD" -e "DROP DATABASE IF EXISTS test;" >/dev/null 2>&1; then
+        warning "Không thể xóa test database."
+    fi
     
     # Reload privileges
-    mysql -u root -p"$DB_ROOT_PASSWORD" -e "FLUSH PRIVILEGES;" >/dev/null 2>&1
+    if ! mysql -u root -p"$DB_ROOT_PASSWORD" -e "FLUSH PRIVILEGES;" >/dev/null 2>&1; then
+        error "Không thể reload privileges."
+    fi
     
     # Save root password
     mkdir -p "$WPST_DIR/config"
@@ -328,11 +357,18 @@ secure_mariadb() {
 create_directories() {
     progress "Tạo cấu trúc thư mục..."
     
-    mkdir -p "$WPST_DIR"/{bin,lib,templates,config,logs}
+    if ! mkdir -p "$WPST_DIR"/{bin,lib,templates,config,logs}; then
+        error "Không thể tạo cấu trúc thư mục WPST."
+    fi
     
     # Set permissions
-    chown -R frankenphp:frankenphp /var/www >/dev/null 2>&1
-    chmod 755 /var/www
+    if ! chown -R frankenphp:frankenphp /var/www >/dev/null 2>&1; then
+        warning "Không thể thay đổi owner cho /var/www."
+    fi
+    
+    if ! chmod 755 /var/www; then
+        warning "Không thể thay đổi permission cho /var/www."
+    fi
     
     success "Cấu trúc thư mục đã được tạo"
 }
@@ -462,7 +498,9 @@ start_services() {
         error "Không thể khởi động FrankenPHP service."
     fi
     
-    systemctl enable frankenphp >/dev/null 2>&1
+    if ! systemctl enable frankenphp >/dev/null 2>&1; then
+        warning "Không thể enable FrankenPHP service."
+    fi
     
     if systemctl is-active --quiet frankenphp; then
         success "FrankenPHP đã được khởi động"
@@ -476,19 +514,28 @@ install_wpst_script() {
     progress "Cài đặt WPST Panel..."
     
     # Tạo thư mục WPST nếu chưa có
-    mkdir -p "$WPST_DIR"
+    if ! mkdir -p "$WPST_DIR"; then
+        error "Không thể tạo thư mục WPST."
+    fi
     
     # Tải WPST script từ GitHub
     if ! curl -fsSL "https://raw.githubusercontent.com/maixuanthuy/wpst/main/src/wpst" -o "$WPST_DIR/wpst" >/dev/null 2>&1; then
         error "Không thể tải WPST script từ GitHub."
     fi
-    chmod +x "$WPST_DIR/wpst"
+    
+    if ! chmod +x "$WPST_DIR/wpst"; then
+        error "Không thể cấp quyền thực thi cho WPST script."
+    fi
     
     # Tạo symlink để có thể chạy từ bất kỳ đâu
-    ln -sf "$WPST_DIR/wpst" /usr/local/bin/wpst
+    if ! ln -sf "$WPST_DIR/wpst" /usr/local/bin/wpst; then
+        warning "Không thể tạo symlink cho WPST script."
+    fi
     
     # Tải thư mục lib từ GitHub
-    mkdir -p "$WPST_DIR/lib"
+    if ! mkdir -p "$WPST_DIR/lib"; then
+        error "Không thể tạo thư mục lib."
+    fi
     
     # Tải các file trong lib
     local lib_files=("adminneo.php" "tinyfilemanager.php" "8g-caddy.snippet")
@@ -500,9 +547,17 @@ install_wpst_script() {
     
     # Đảm bảo quyền cho lib files
     if [[ -d "$WPST_DIR/lib" ]]; then
-        chown -R frankenphp:frankenphp "$WPST_DIR/lib"
-        find "$WPST_DIR/lib" -type f -exec chmod 644 {} \;
-        find "$WPST_DIR/lib" -type d -exec chmod 755 {} \;
+        if ! chown -R frankenphp:frankenphp "$WPST_DIR/lib"; then
+            warning "Không thể thay đổi owner cho lib files."
+        fi
+        
+        if ! find "$WPST_DIR/lib" -type f -exec chmod 644 {} \; 2>/dev/null; then
+            warning "Không thể thay đổi permission cho lib files."
+        fi
+        
+        if ! find "$WPST_DIR/lib" -type d -exec chmod 755 {} \; 2>/dev/null; then
+            warning "Không thể thay đổi permission cho lib directories."
+        fi
     fi
     
     success "WPST Panel đã được cài đặt"
