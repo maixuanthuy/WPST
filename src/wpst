@@ -255,6 +255,7 @@ get_system_stats() {
 get_service_status() {
     local frankenphp_status=$(systemctl is-active frankenphp 2>/dev/null || echo "Unknown")
     local mariadb_status=$(systemctl is-active mariadb 2>/dev/null || echo "Unknown")
+    local sites_count=$(get_sites_count)
     
     # Lấy version của FrankenPHP - chỉ lấy phần cần thiết
     local frankenphp_version="Unknown"
@@ -271,6 +272,7 @@ get_service_status() {
     echo -e "${CYAN}Services: ${NC}"
     echo -e "FrankenPHP:    $(show_status_indicator "$frankenphp_status") ${frankenphp_status} (v${frankenphp_version})"
     echo -e "MariaDB:       $(show_status_indicator "$mariadb_status") ${mariadb_status} (v${mariadb_version})"
+    echo -e "Websites:      ${GREEN}●${NC} ${sites_count} sites"
 }
 
 get_sites_count() {
@@ -483,6 +485,14 @@ show_sites_dashboard() {
     clear
     show_header "Quản lý Website"
     
+    # Phần System Stats
+    echo -e "${BLUE}🖥️  THÔNG TIN HỆ THỐNG${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    get_system_stats
+    echo ""
+    get_service_status
+    echo ""
+    
     # Phần Status - danh sách websites
     echo -e "${BLUE}🌐 DANH SÁCH WEBSITE${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -600,37 +610,28 @@ show_single_site_dashboard() {
     echo -e "${BLUE}📋 MENU QUẢN LÝ${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "1. Caddyfile"
-    
-    # 8G Firewall status check
-    local firewall_status=$(get_8g_firewall_status "$domain")
-    if [[ "$firewall_status" == "ON" ]]; then
-        echo "2. 8G Firewall - (ĐANG BẬT)"
-    else
-        echo "2. 8G Firewall - (ĐANG TẮT)"
-    fi
-    
-    echo "3. Cài đặt SSL"
+    echo "2. Cài đặt SSL"
     
     # Kiểm tra trạng thái TinyFileManager
     local tinyfilemanager_files=$(find "$public_dir" -name "tinyfilemanager_*.php" 2>/dev/null | wc -l)
     if [[ $tinyfilemanager_files -gt 0 ]]; then
-        echo "4. TinyFileManager - (ĐANG BẬT)"
+        echo "3. TinyFileManager - (ĐANG BẬT)"
     else
-        echo "4. TinyFileManager - (ĐANG TẮT)"
+        echo "3. TinyFileManager - (ĐANG TẮT)"
     fi
     
-    echo "5. Quản lý Database"
-    echo "6. Backup & Restore"
+    echo "4. Quản lý Database"
+    echo "5. Backup & Restore"
     
     # Hiển thị menu bật/tắt động
     local site_status=$(get_site_status "$domain")
     if [[ "$site_status" == "ON" ]]; then
-        echo "7. Tắt website"
+        echo "6. Tắt website"
     else
-        echo "7. Bật website"
+        echo "6. Bật website"
     fi
     
-    echo "8. Xóa website"
+    echo "7. Xóa website"
     echo ""
     echo "0. Quay lại danh sách website"
     echo "q. Thoát"
@@ -643,24 +644,21 @@ show_single_site_dashboard() {
             edit_caddyfile "$domain"
             ;;
         2)
-            toggle_8g_firewall "$domain"
-            ;;
-        3)
             setup_custom_ssl "$domain"
             ;;
-        4)
+        3)
             setup_tinyfilemanager "$domain"
             ;;
-        5)
+        4)
             manage_database "$domain"
             ;;
-        6)
+        5)
             backup_restore_site "$domain"
             ;;
-        7)
+        6)
             toggle_site_status "$domain"
             ;;
-        8)
+        7)
             delete_site "$domain"
             ;;
         0)
@@ -1077,36 +1075,21 @@ create_site_caddyfile() {
     local domain="$1"
     local site_dir="$SITES_DIR/$domain"
     
-    # Copy 8G Firewall rules to site directory
-    local firewall_source="$WPST_DIR/lib/8g-caddy.snippet"
-    local firewall_file="$site_dir/8g-firewall.snippet"
-    
-    if [[ -f "$firewall_source" ]]; then
-        cp "$firewall_source" "$firewall_file"
-        chown frankenphp:frankenphp "$firewall_file"
-        chmod 644 "$firewall_file"
-    fi
-    
     cat > "$site_dir/Caddyfile" << EOF
 $domain {
-    import 8g-firewall.snippet
     root * $site_dir/public
     encode zstd gzip
     php_server
     header {
         -Server
         -X-Powered-By
-        
-        # Cache Control
-        Cache-Control "public, max-age=3600, must-revalidate"
-        
+
         # Security Headers
         X-Content-Type-Options nosniff
         X-Frame-Options DENY
         X-XSS-Protection "1; mode=block"
         Referrer-Policy "strict-origin-when-cross-origin"
         Permissions-Policy "camera=(), microphone=(), geolocation=(), gyroscope=(), magnetometer=(), payment=()"
-        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
         Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
     }
     log {
@@ -1141,6 +1124,42 @@ show_site_creation_summary() {
         echo -e "Database: ${GREEN}$DB_NAME${NC}"
         echo -e "User: ${GREEN}$DB_USER${NC}"
         echo -e "Password: ${GREEN}$DB_PASSWORD${NC}"
+    fi
+    
+    # Phân quyền sau khi tạo site thành công
+    echo ""
+    echo -e "${BLUE}🔧 PHÂN QUYỀN HỆ THỐNG${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "${CYAN}Đang phân quyền thư mục website...${NC}"
+    
+    if chown -R frankenphp:frankenphp "$site_dir" 2>/dev/null; then
+        echo -e "${GREEN}✓ Đã phân quyền owner cho thư mục website${NC}"
+    else
+        echo -e "${YELLOW}⚠ Không thể phân quyền owner cho thư mục website${NC}"
+    fi
+    
+    if find "$site_dir" -type d -exec chmod 755 {} \; 2>/dev/null; then
+        echo -e "${GREEN}✓ Đã phân quyền thư mục (755)${NC}"
+    else
+        echo -e "${YELLOW}⚠ Không thể phân quyền thư mục${NC}"
+    fi
+    
+    if find "$site_dir" -type f -exec chmod 644 {} \; 2>/dev/null; then
+        echo -e "${GREEN}✓ Đã phân quyền file (644)${NC}"
+    else
+        echo -e "${YELLOW}⚠ Không thể phân quyền file${NC}"
+    fi
+    
+    # Restart FrankenPHP
+    echo ""
+    echo -e "${BLUE}🔄 KHỞI ĐỘNG LẠI DỊCH VỤ${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "${CYAN}Đang restart FrankenPHP...${NC}"
+    
+    if systemctl restart frankenphp 2>/dev/null; then
+        echo -e "${GREEN}✓ FrankenPHP đã được restart thành công${NC}"
+    else
+        echo -e "${YELLOW}⚠ Không thể restart FrankenPHP${NC}"
     fi
     
     echo ""
@@ -2060,150 +2079,7 @@ configure_ssl_manual() {
 }
 
 # 8G Firewall Functions
-get_8g_firewall_status() {
-    local domain="$1"
-    local site_dir="$SITES_DIR/$domain"
-    local firewall_file="$site_dir/8g-firewall.snippet"
-    local caddyfile="$site_dir/Caddyfile"
-    
-    if [[ -f "$firewall_file" && -f "$caddyfile" ]] && grep -q "import.*8g-firewall.snippet" "$caddyfile" 2>/dev/null; then
-        echo "ON"
-    else
-        echo "OFF"
-    fi
-}
 
-toggle_8g_firewall() {
-    local domain="$1"
-    local site_dir="$SITES_DIR/$domain"
-    local firewall_file="$site_dir/8g-firewall.snippet"
-    local caddyfile="$site_dir/Caddyfile"
-    local firewall_source="$WPST_DIR/lib/8g-caddy.snippet"
-    
-        clear
-    show_header "8G Firewall: $domain"
-    
-    local current_status=$(get_8g_firewall_status "$domain")
-    
-    echo -e "${BLUE}📊 TRẠNG THÁI HIỆN TẠI${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    if [[ "$current_status" == "ON" ]]; then
-        echo -e "8G Firewall: ${GREEN}ĐANG BẬT${NC}"
-    else
-        echo -e "8G Firewall: ${RED}ĐANG TẮT${NC}"
-    fi
-        echo ""
-    
-    echo -e "${BLUE}📋 THÔNG TIN 8G FIREWALL${NC}"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "8G Firewall là bộ lọc bảo mật mạnh mẽ giúp chặn:"
-    echo "• SQL Injection attacks"
-    echo "• XSS (Cross-site scripting)"
-    echo "• File inclusion attacks" 
-    echo "• Remote code execution"
-    echo "• Malicious user agents"
-    echo "• Bad query strings"
-    echo "• Spam và bot độc hại"
-    echo ""
-    
-    if [[ "$current_status" == "ON" ]]; then
-        echo -e "${YELLOW}Bạn có muốn TẮT 8G Firewall?${NC}"
-        echo ""
-        if read_confirm "Tắt 8G Firewall?" "n"; then
-            disable_8g_firewall "$domain"
-        else
-            info "Đã hủy tắt 8G Firewall."
-        fi
-    else
-        echo -e "${GREEN}Bạn có muốn BẬT 8G Firewall?${NC}"
-        echo ""
-        if read_confirm "Bật 8G Firewall?" "y"; then
-            enable_8g_firewall "$domain"
-        else
-            info "Đã hủy bật 8G Firewall."
-        fi
-    fi
-    
-        echo ""
-        read -p "Nhấn Enter để quay lại..."
-    show_single_site_dashboard "$domain"
-}
-
-enable_8g_firewall() {
-    local domain="$1"
-    local site_dir="$SITES_DIR/$domain"
-    local firewall_file="$site_dir/8g-firewall.snippet"
-    local caddyfile="$site_dir/Caddyfile"
-    local firewall_source="$WPST_DIR/lib/8g-caddy.snippet"
-    
-    info "Đang bật 8G Firewall..."
-    
-    # Copy 8G firewall rules to site directory
-    if [[ ! -f "$firewall_source" ]]; then
-        error "Không tìm thấy file 8G firewall rules: $firewall_source"
-        return 1
-    fi
-    
-    cp "$firewall_source" "$firewall_file"
-    chown frankenphp:frankenphp "$firewall_file"
-    chmod 644 "$firewall_file"
-    
-    # Add import to Caddyfile
-    if [[ -f "$caddyfile" ]]; then
-        # Kiểm tra xem đã có import chưa
-        if ! grep -q "import.*8g-firewall.snippet" "$caddyfile"; then
-            # Thêm import sau dòng đầu tiên ($domain {)
-            sed -i "/^$domain {/a\\    import 8g-firewall.snippet" "$caddyfile"
-            
-            # Validate Caddyfile
-            if frankenphp validate --config "$caddyfile" 2>/dev/null; then
-                systemctl restart frankenphp
-                success "8G Firewall đã được bật thành công!"
-            else
-                error "Lỗi cấu hình Caddyfile. Đang rollback..."
-                # Remove import line
-                sed -i '/import.*8g-firewall.snippet/d' "$caddyfile"
-                rm -f "$firewall_file"
-                return 1
-            fi
-        else
-            success "8G Firewall đã được bật!"
-        fi
-    else
-        error "Không tìm thấy Caddyfile cho domain $domain"
-        rm -f "$firewall_file"
-        return 1
-    fi
-}
-
-disable_8g_firewall() {
-    local domain="$1"
-    local site_dir="$SITES_DIR/$domain"
-    local firewall_file="$site_dir/8g-firewall.snippet"
-    local caddyfile="$site_dir/Caddyfile"
-    
-    info "Đang tắt 8G Firewall..."
-    
-    # Remove import from Caddyfile
-    if [[ -f "$caddyfile" ]]; then
-        sed -i '/import.*8g-firewall.snippet/d' "$caddyfile"
-        
-        # Validate Caddyfile
-        if frankenphp validate --config "$caddyfile" 2>/dev/null; then
-            systemctl restart frankenphp
-            # Remove firewall file
-            rm -f "$firewall_file"
-            success "8G Firewall đã được tắt!"
-        else
-            error "Lỗi cấu hình Caddyfile sau khi tắt firewall"
-            return 1
-        fi
-    else
-        # Remove firewall file anyway
-        rm -f "$firewall_file"
-        warning "Không tìm thấy Caddyfile, chỉ xóa file firewall"
-    fi
-}
 
 setup_tinyfilemanager() {
     local domain="$1"

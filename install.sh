@@ -425,24 +425,24 @@ EOF
     # Create optimized php.ini
     cat > /etc/frankenphp/php.ini << 'EOF'
 ; ########### CẤU HÌNH CƠ BẢN ###########
-memory_limit = 128M
+memory_limit = 256M
 max_execution_time = 300
 max_input_time = 300
 default_socket_timeout = 120
 date.timezone = Asia/Ho_Chi_Minh
 
 ; ########### UPLOAD FILES ###########
-upload_max_filesize = 128M
-post_max_size = 256M
-max_file_uploads = 10
-max_input_vars = 20000
+upload_max_filesize = 64M
+post_max_size = 128M
+max_file_uploads = 20
+max_input_vars = 10000
 file_uploads = On
 
 ; ########### OUTPUT & BUFFER ###########
 output_buffering = 4096
 implicit_flush = Off
 zlib.output_compression = On
-zlib.output_compression_level = 6
+zlib.output_compression_level = 5
 
 ; ########### SESSION ###########
 session.save_handler = files
@@ -455,29 +455,29 @@ session.cookie_secure = Off
 session.use_strict_mode = On
 session.cookie_samesite = "Lax"
 
-; ########### OPCODE CACHE (QUAN TRỌNG) ###########
+; ########### OPCODE CACHE (CÂN BẰNG) ###########
 opcache.enable=1
-opcache.memory_consumption=128
-opcache.interned_strings_buffer=16
-opcache.max_accelerated_files=4000
-opcache.max_wasted_percentage=10
+opcache.memory_consumption=64
+opcache.interned_strings_buffer=8
+opcache.max_accelerated_files=2000
+opcache.max_wasted_percentage=5
 opcache.validate_timestamps=1
-opcache.revalidate_freq=5
+opcache.revalidate_freq=10
 opcache.fast_shutdown=1
 opcache.enable_cli=0
-opcache.jit=1254
-opcache.jit_buffer_size=32M
-opcache.save_comments=0
+opcache.jit=1235
+opcache.jit_buffer_size=16M
+opcache.save_comments=1
 opcache.file_update_protection=2
 opcache.huge_code_pages=0
 opcache.preload_user = frankenphp
 
 ; ########### REALPATH CACHE ###########
-realpath_cache_size = 16M
-realpath_cache_ttl = 600
+realpath_cache_size = 8M
+realpath_cache_ttl = 300
 
-; ########### WORDPRESS OPTIMIZATION ###########
-disable_functions = exec,passthru,shell_exec,system
+; ########### SECURITY & COMPATIBILITY ###########
+disable_functions = exec,passthru,shell_exec,system,proc_open,popen
 expose_php = Off
 allow_url_fopen = On
 allow_url_include = Off
@@ -485,22 +485,25 @@ enable_dl = Off
 cgi.fix_pathinfo = 0
 
 ; ########### DATABASE ###########
-mysqli.max_persistent = 10
-mysqli.max_links = 20
+mysqli.max_persistent = 5
+mysqli.max_links = 10
 mysqli.default_port = 3306
 mysqli.reconnect = Off
 
 ; ########### PERFORMANCE TUNING ###########
 max_input_nesting_level = 64
-pcre.backtrack_limit = 1000000
+pcre.backtrack_limit = 100000
 pcre.recursion_limit = 100000
 
-; ########### WORDPRESS SPECIFIC ###########
+; ########### ERROR HANDLING ###########
+display_errors = Off
+log_errors = On
+error_log = /var/log/php_errors.log
+error_reporting = E_ALL & ~E_DEPRECATED & ~E_STRICT
+
+; ########### USER INI ###########
 user_ini.filename = ".user.ini"
 user_ini.cache_ttl = 300
-
-; ########### APCU ###########
-apc.shm_size = 128M
 EOF
 
     # Set permissions
@@ -590,7 +593,7 @@ install_wpst_script() {
     fi
     
     # Tải các file trong lib
-    local lib_files=("adminneo.php" "tinyfilemanager.php" "8g-caddy.snippet")
+    local lib_files=("adminneo.php" "tinyfilemanager.php")
     for file in "${lib_files[@]}"; do
         if ! curl -fsSL "https://raw.githubusercontent.com/maixuanthuy/wpst/main/src/lib/$file" -o "$WPST_DIR/lib/$file" >/dev/null 2>&1; then
             warning "Không thể tải file $file từ GitHub."

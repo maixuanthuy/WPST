@@ -155,19 +155,19 @@ default "0"
 # Block bad request methods
 respond @bad_request_method_8g "Method Not Allowed" 405
 
-# Block bad query strings
-@bad_query_8g expression {bad_query_string_8g} != "0"
+# Block bad query strings (only block if value is not "0")
+@bad_query_8g expression `{bad_query_string_8g} != "0"`
 respond @bad_query_8g "Forbidden" 403
 
 # Block bad user agents
-@bad_user_agent_8g expression {bad_user_agent_8g} != "0"
+@bad_user_agent_8g expression `{bad_user_agent_8g} != "0"`
 respond @bad_user_agent_8g "Forbidden" 403
 
 # Block bad request URI
-@bad_request_uri_8g expression {bad_request_uri_8g} != "0"
+@bad_request_uri_8g expression `{bad_request_uri_8g} != "0"`
 respond @bad_request_uri_8g "Forbidden" 403
 
 # Block bad HTTP cookie
-@bad_cookie_8g expression {bad_http_cookie_8g} != "0"
+@bad_cookie_8g expression `{bad_http_cookie_8g} != "0"`
 respond @bad_cookie_8g "Forbidden" 403
 
