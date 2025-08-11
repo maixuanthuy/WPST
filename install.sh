@@ -186,8 +186,8 @@ check_server_status() {
 confirm_installation() {
     echo -e "\n${BLUE}🚀 CHUẨN BỊ CÀI ĐẶT WPST PANEL${NC}"
     echo -e "   Các dịch vụ sẽ được cài đặt:"
-    echo -e "   • FrankenPHP (Web Server + PHP)"
-    echo -e "   • MariaDB $MARIADB_VERSION (Database)"
+    echo -e "   • FrankenPHP (Web Server + PHP) - Tải package trực tiếp"
+    echo -e "   • MariaDB $MARIADB_VERSION (Database) - Cài dependencies khi cần"
     echo -e "   • WPST Panel (Management Tool)"
     echo -e "   • SSL tự động với Let's Encrypt"
     
@@ -214,21 +214,21 @@ confirm_installation() {
     echo -e "\n${GREEN}Bắt đầu cài đặt...${NC}\n"
 }
 
-# Cài đặt dependencies
-install_dependencies() {
-    progress "Cài đặt các gói phụ thuộc..."
+# Cài đặt dependencies cơ bản (chỉ những gói thực sự cần thiết)
+install_basic_dependencies() {
+    progress "Cài đặt các gói cơ bản..."
     
     # Update package list
     if ! apt update >/dev/null 2>&1; then
         error "Không thể cập nhật danh sách gói."
     fi
     
-    # Install dependencies
-    if ! apt install -y curl wget gnupg2 software-properties-common lsb-release ca-certificates apt-transport-https dirmngr >/dev/null 2>&1; then
-        error "Không thể cài đặt các gói phụ thuộc."
+    # Chỉ cài đặt những gói thực sự cần thiết cho việc tải và cài đặt
+    if ! apt install -y curl wget >/dev/null 2>&1; then
+        error "Không thể cài đặt curl và wget."
     fi
     
-    success "Dependencies đã được cài đặt"
+    success "Các gói cơ bản đã được cài đặt"
 }
 
 # Lấy phiên bản FrankenPHP mới nhất
@@ -262,8 +262,11 @@ install_frankenphp() {
     
     progress "Cài đặt FrankenPHP package..."
     if ! dpkg -i "$PACKAGE_NAME" >/dev/null 2>&1; then
-        progress "Sửa dependencies..."
-        apt install -f -y >/dev/null 2>&1 || error "Không thể sửa package dependencies."
+        progress "Cài đặt thất bại, đang sửa dependencies..."
+        if ! apt-get install -f -y >/dev/null 2>&1; then
+            error "Không thể sửa package dependencies."
+        fi
+        progress "Đã sửa dependencies, kiểm tra lại cài đặt..."
     fi
     
     # Kiểm tra cài đặt
@@ -278,9 +281,25 @@ install_frankenphp() {
 install_mariadb() {
     progress "Cài đặt MariaDB $MARIADB_VERSION..."
     
+    # Cài đặt gnupg2 nếu chưa có (cần cho việc import key)
+    if ! command -v gpg >/dev/null 2>&1; then
+        progress "Cài đặt gnupg2 cho việc import key..."
+        if ! apt install -y gnupg2 >/dev/null 2>&1; then
+            error "Không thể cài đặt gnupg2."
+        fi
+    fi
+    
     # Add MariaDB repository
     if ! curl -fsSL https://mariadb.org/mariadb_release_signing_key.asc | gpg --dearmor -o /usr/share/keyrings/mariadb-keyring.gpg >/dev/null 2>&1; then
         error "Không thể tải MariaDB signing key."
+    fi
+    
+    # Cài đặt lsb-release nếu chưa có (cần cho lsb_release -cs)
+    if ! command -v lsb_release >/dev/null 2>&1; then
+        progress "Cài đặt lsb-release..."
+        if ! apt install -y lsb-release >/dev/null 2>&1; then
+            error "Không thể cài đặt lsb-release."
+        fi
     fi
     
     OS_CODENAME=$(lsb_release -cs)
@@ -715,7 +734,7 @@ EOF
     
     echo -e "${CYAN}🔄 Đang cài đặt...${NC}\n"
     
-    install_dependencies
+    install_basic_dependencies
     install_frankenphp
     install_mariadb
     secure_mariadb
