@@ -15,11 +15,6 @@ SITES_DIR="/var/www"
 CONFIG_DIR="$WPST_DIR/config"
 LOG_DIR="$WPST_DIR/logs"
 
-# Load common functions nếu có
-if [[ -f "$WPST_DIR/lib/common.sh" ]]; then
-    source "$WPST_DIR/lib/common.sh"
-fi
-
 # Màu sắc (định nghĩa sau khi load common.sh để tránh conflict)
 RED='\033[0;31m'
 GREEN='\033[0;32m'

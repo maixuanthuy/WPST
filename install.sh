@@ -463,7 +463,7 @@ install_wpst_script() {
     mkdir -p "$WPST_DIR/lib"
     
     # Tải các file trong lib
-    local lib_files=("adminneo.php" "tinyfilemanager.php")
+    local lib_files=("adminneo.php" "tinyfilemanager.php" "8g-caddy.snippet")
     for file in "${lib_files[@]}"; do
         if ! curl -fsSL "https://raw.githubusercontent.com/maixuanthuy/wpst/main/src/lib/$file" -o "$WPST_DIR/lib/$file"; then
             log "Cảnh báo: Không thể tải file $file từ GitHub."
@@ -478,6 +478,28 @@ install_wpst_script() {
         find "$WPST_DIR/lib" -type f -exec chmod 644 {} \;
         find "$WPST_DIR/lib" -type d -exec chmod 755 {} \;
         log "Đã phân quyền thư mục lib"
+    fi
+    
+    # Validate critical lib files
+    log "Kiểm tra các file lib quan trọng..."
+    local critical_files=("8g-caddy.snippet" "adminneo.php" "tinyfilemanager.php")
+    local missing_files=()
+    
+    for file in "${critical_files[@]}"; do
+        if [[ ! -f "$WPST_DIR/lib/$file" ]]; then
+            missing_files+=("$file")
+            warning "File lib quan trọng bị thiếu: $file"
+        else
+            log "✓ File lib $file đã sẵn sàng"
+        fi
+    done
+    
+    if [[ ${#missing_files[@]} -gt 0 ]]; then
+        warning "Một số file lib quan trọng bị thiếu. WPST có thể không hoạt động đầy đủ."
+        warning "Files thiếu: ${missing_files[*]}"
+        warning "Bạn có thể tải thủ công từ: https://github.com/maixuanthuy/wpst/tree/main/src/lib"
+    else
+        log "✓ Tất cả file lib quan trọng đã được tải thành công"
     fi
     
     info "WPST Panel đã được cài đặt tại $WPST_DIR"
