@@ -24,8 +24,8 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Biến toàn cục
-WPST_DIR="/var/www/wpst-script"
-SITES_DIR="/var/www/sites"
+WPST_DIR="/opt/wpst"
+SITES_DIR="/var/www"
 LOG_FILE="/tmp/wpst-install.log"
 MARIADB_VERSION="11.8"
 
@@ -162,6 +162,7 @@ install_frankenphp() {
     # Tạo URL download
     VERSION_NUM=${FRANKENPHP_VERSION#v} # Bỏ chữ 'v' đầu
     if [[ $OS == "debian" ]]; then
+        # DEB packages sử dụng dấu gạch dưới và có cấu trúc: frankenphp_VERSION-1_ARCH.deb
         PACKAGE_NAME="frankenphp_${VERSION_NUM}-1_${ARCH_NAME}.deb"
         DOWNLOAD_URL="https://github.com/php/frankenphp/releases/download/${FRANKENPHP_VERSION}/${PACKAGE_NAME}"
         
@@ -178,6 +179,7 @@ install_frankenphp() {
         fi
         
     elif [[ $OS == "rhel" ]]; then
+        # RPM packages sử dụng dấu gạch ngang và có cấu trúc: frankenphp-VERSION-1.ARCH.rpm
         if [[ $ARCH_NAME == "amd64" ]]; then
             RPM_ARCH="x86_64"
         else
@@ -283,12 +285,10 @@ create_directories() {
     log "Tạo cấu trúc thư mục..."
     
     mkdir -p "$WPST_DIR"/{bin,lib,templates,config,logs}
-    mkdir -p "$SITES_DIR"
     
     # Set permissions
     chown -R frankenphp:frankenphp /var/www
     chmod 755 /var/www
-    chmod 755 "$SITES_DIR"
     
     info "Cấu trúc thư mục đã được tạo."
 }
@@ -310,13 +310,13 @@ create_frankenphp_config() {
     cat > /etc/frankenphp/Caddyfile << EOF
 {
 	frankenphp {
-		num_threads 4
+		num_threads auto
 		max_threads auto
 		max_wait_time 10
 	}
 }
 
-import /var/www/sites/*/Caddyfile
+import /var/www/*/Caddyfile
 EOF
 
     # Create optimized php.ini
@@ -447,99 +447,30 @@ install_wpst_script() {
     # Tạo thư mục WPST nếu chưa có
     mkdir -p "$WPST_DIR"
     
-    # Copy script chính từ thư mục hiện tại
-    if [[ -f "src/wpst" ]]; then
-        cp "src/wpst" "$WPST_DIR/wpst"
-        chmod +x "$WPST_DIR/wpst"
-        log "Đã copy script chính từ src/wpst"
-    else
-        # Tạo script placeholder nếu không có file gốc
-        cat > "$WPST_DIR/wpst" << 'EOF'
-#!/bin/bash
-# WPST Panel - WordPress Stack Tool
-# Phiên bản: 1.0.0
-
-# Load common functions
-source /var/www/wpst-script/lib/common.sh
-
-# Main menu
-show_main_menu() {
-    clear
-    show_ascii_logo
-    echo ""
-    show_quick_stats
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "1. Quản lý Website"
-    echo "2. Thông tin Hệ thống"
-    echo "3. Cài đặt & Cấu hình"
-    echo "4. Backup & Restore"
-    echo "5. Logs & Monitoring"
-    echo "0. Thoát"
-    echo ""
-    read -p "Lựa chọn: " choice
-    
-    case $choice in
-        1) show_sites_menu ;;
-        2) show_system_info ;;
-        3) show_config_menu ;;
-        4) show_backup_menu ;;
-        5) show_logs_menu ;;
-        0) echo "Tạm biệt!"; exit 0 ;;
-        *) echo "Lựa chọn không hợp lệ."; sleep 1; show_main_menu ;;
-    esac
-}
-
-# Placeholder functions
-show_sites_menu() {
-    echo "Quản lý Website - Đang phát triển..."
-    sleep 2
-    show_main_menu
-}
-
-show_system_info() {
-    echo "Thông tin Hệ thống - Đang phát triển..."
-    sleep 2
-    show_main_menu
-}
-
-show_config_menu() {
-    echo "Cài đặt & Cấu hình - Đang phát triển..."
-    sleep 2
-    show_main_menu
-}
-
-show_backup_menu() {
-    echo "Backup & Restore - Đang phát triển..."
-    sleep 2
-    show_main_menu
-}
-
-show_logs_menu() {
-    echo "Logs & Monitoring - Đang phát triển..."
-    sleep 2
-    show_main_menu
-}
-
-# Start the application
-show_main_menu
-EOF
-        log "Đã tạo script placeholder"
+    # Tải WPST script từ GitHub
+    log "Tải WPST script từ GitHub..."
+    if ! curl -fsSL "https://raw.githubusercontent.com/maixuanthuy/wpst/main/src/wpst" -o "$WPST_DIR/wpst"; then
+        error "Không thể tải WPST script từ GitHub."
     fi
+    chmod +x "$WPST_DIR/wpst"
+    log "Đã tải WPST script thành công"
     
     # Tạo symlink để có thể chạy từ bất kỳ đâu
     ln -sf "$WPST_DIR/wpst" /usr/local/bin/wpst
     
-    # Copy thư mục lib nếu có
-    if [[ -d "src/lib" ]]; then
-        cp -r src/lib "$WPST_DIR/"
-        log "Đã copy thư mục lib"
-    else
-        # Tạo thư mục lib cơ bản
-        mkdir -p "$WPST_DIR/lib"
-        log "Đã tạo thư mục lib"
-    fi
+    # Tải thư mục lib từ GitHub
+    log "Tải thư mục lib từ GitHub..."
+    mkdir -p "$WPST_DIR/lib"
+    
+    # Tải các file trong lib
+    local lib_files=("adminneo.php" "tinyfilemanager.php")
+    for file in "${lib_files[@]}"; do
+        if ! curl -fsSL "https://raw.githubusercontent.com/maixuanthuy/wpst/main/src/lib/$file" -o "$WPST_DIR/lib/$file"; then
+            log "Cảnh báo: Không thể tải file $file từ GitHub."
+        else
+            log "Đã tải file $file thành công"
+        fi
+    done
     
     # Đảm bảo quyền cho lib files
     if [[ -d "$WPST_DIR/lib" ]]; then
@@ -582,14 +513,21 @@ main() {
     
     echo -e "${BLUE}"
     cat << 'EOF'
- _    _ _____   _____ _______   _____                 _ 
-| |  | |  __ \ / ____|__   __| |  __ \               | |
-| |  | | |__) | (___    | |    | |__) |_ _ _ __   ___ | |
-| |/\| |  ___/ \___ \   | |    |  ___/ _` | '_ \ / _ \| |
-\  /\  / |     ____) |  | |    | |  | (_| | | | |  __/| |
- \/  \/|_|    |_____/   |_|    |_|   \__,_|_| |_|\___||_|
-
-WordPress Stack Tool - Phiên bản 1.0.0
+ ########                                         
+##########        ##########       ###########    
+###########      ############     ############### 
+###########     ##############   #################
+ ###########    ###############  #################
+ ###########    ###############  ######      #####
+  ###########   ######## ####### ######      #####
+  ###########  ######### ####### ###### ##########
+   ########### ######### ####### ###### ######### 
+    ########## #########  ###### ###### #1.0.0   
+    ########## ########   #############           
+     ##################    ###########            
+      ################      #########             
+       ##############         ####                
+          #########
 EOF
     echo -e "${NC}\n"
     
