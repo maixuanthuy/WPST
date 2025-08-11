@@ -396,7 +396,7 @@ create_frankenphp_config() {
 {
 	frankenphp {
 		max_threads auto
-		max_wait_time 5
+		max_wait_time 5s
 	}
 }
 
