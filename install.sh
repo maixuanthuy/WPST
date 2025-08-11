@@ -9,8 +9,15 @@ set -eE
 # Trap function để handle lỗi
 error_handler() {
     local line_num=$1
-    echo -e "${RED}[LỖI]${NC} Script bị lỗi tại dòng $line_num" >&2
+    local exit_code=$?
+    echo -e "${RED}[LỖI]${NC} Script bị lỗi tại dòng $line_num (exit code: $exit_code)" >&2
     echo -e "${RED}[LỖI]${NC} Quá trình cài đặt bị gián đoạn." >&2
+    
+    # Hiển thị thêm thông tin debug nếu cần
+    if [[ $exit_code -ne 0 ]]; then
+        echo -e "${YELLOW}[DEBUG]${NC} Lệnh cuối cùng thất bại với exit code: $exit_code" >&2
+    fi
+    
     exit 1
 }
 
@@ -102,17 +109,30 @@ detect_system() {
     info "Trình quản lý gói: $PKG_MANAGER"
 }
 
+# Biến toàn cục cho warnings
+SERVER_WARNINGS=()
+
+# Function để kiểm tra và xử lý lỗi
+check_error() {
+    local exit_code=$?
+    if [[ $exit_code -ne 0 ]]; then
+        echo -e "${RED}[LỖI]${NC} Lệnh thất bại với exit code: $exit_code" >&2
+        return $exit_code
+    fi
+    return 0
+}
+
 # Kiểm tra server hiện tại
 check_server_status() {
     log "Kiểm tra trạng thái server..."
     
     local conflicts=()
-    local warnings=()
+    SERVER_WARNINGS=()
     
     # Kiểm tra FrankenPHP
     if command -v frankenphp >/dev/null 2>&1; then
         local fp_version=$(frankenphp version 2>/dev/null | head -1 || echo "Unknown")
-        warnings+=("FrankenPHP đã cài đặt: $fp_version (sẽ cài đè)")
+        SERVER_WARNINGS+=("FrankenPHP đã cài đặt: $fp_version (sẽ cài đè)")
     fi
     
     # Kiểm tra MariaDB/MySQL
@@ -122,7 +142,7 @@ check_server_status() {
     
     # Kiểm tra thư mục WPST
     if [[ -d "$WPST_DIR" ]]; then
-        warnings+=("Thư mục WPST đã tồn tại: $WPST_DIR (sẽ ghi đè)")
+        SERVER_WARNINGS+=("Thư mục WPST đã tồn tại: $WPST_DIR (sẽ ghi đè)")
     fi
     
     # Kiểm tra kết nối internet
@@ -142,9 +162,9 @@ check_server_status() {
     echo -e "   Kiến trúc: ${GREEN}$ARCH ($ARCH_NAME)${NC}"
     echo -e "   Dung lượng trống: ${GREEN}$(($AVAILABLE_SPACE/1024/1024))GB${NC}"
     
-    if [[ ${#warnings[@]} -gt 0 ]]; then
+    if [[ ${#SERVER_WARNINGS[@]} -gt 0 ]]; then
         echo -e "\n${YELLOW}⚠️  CẢNH BÁO:${NC}"
-        for warning in "${warnings[@]}"; do
+        for warning in "${SERVER_WARNINGS[@]}"; do
             echo -e "   • $warning"
         done
     fi
@@ -171,15 +191,20 @@ confirm_installation() {
     echo -e "   • WPST Panel (Management Tool)"
     echo -e "   • SSL tự động với Let's Encrypt"
     
-    if [[ ${#warnings[@]} -gt 0 ]]; then
+    if [[ ${#SERVER_WARNINGS[@]} -gt 0 ]]; then
         echo -e "\n${YELLOW}⚠️  Lưu ý:${NC}"
-        for warning in "${warnings[@]}"; do
+        for warning in "${SERVER_WARNINGS[@]}"; do
             echo -e "   • $warning"
         done
     fi
     
     echo -e "\n${CYAN}Bạn có muốn tiếp tục cài đặt không? (y/N):${NC} "
-    read -r response
+    
+    # Thử đọc từ terminal, nếu thất bại thì tự động tiếp tục
+    if ! read -r response < /dev/tty 2>/dev/null; then
+        echo "y"
+        response="y"
+    fi
     
     if [[ ! "$response" =~ ^[Yy]$ ]]; then
         echo -e "${YELLOW}Cài đặt đã bị hủy.${NC}"
@@ -213,9 +238,9 @@ get_frankenphp_version() {
 
 # Cài đặt FrankenPHP
 install_frankenphp() {
-    progress "Cài đặt FrankenPHP $FRANKENPHP_VERSION..."
-    
     get_frankenphp_version
+    
+    progress "Cài đặt FrankenPHP $FRANKENPHP_VERSION..."
     
     # Tạo URL download
     VERSION_NUM=${FRANKENPHP_VERSION#v} # Bỏ chữ 'v' đầu
@@ -510,6 +535,10 @@ show_completion_info() {
 main() {
     # Trap để handle Ctrl+C
     trap 'echo -e "\n${RED}Đã hủy cài đặt.${NC}"; exit 1' INT TERM
+    
+    # Debug info
+    echo -e "${YELLOW}[DEBUG]${NC} Script đang chạy với PID: $$" >&2
+    echo -e "${YELLOW}[DEBUG]${NC} Terminal tương tác: $([[ -t 0 ]] && echo "Có" || echo "Không")" >&2
     
     echo -e "${BLUE}"
     cat << 'EOF'
