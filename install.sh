@@ -361,6 +361,11 @@ create_directories() {
         error "Không thể tạo cấu trúc thư mục WPST."
     fi
     
+    # Tạo thư mục /var/www nếu chưa có
+    if ! mkdir -p /var/www; then
+        error "Không thể tạo thư mục /var/www."
+    fi
+    
     # Set permissions
     if ! chown -R frankenphp:frankenphp /var/www >/dev/null 2>&1; then
         warning "Không thể thay đổi owner cho /var/www."
@@ -390,9 +395,8 @@ create_frankenphp_config() {
     cat > /etc/frankenphp/Caddyfile << 'EOF'
 {
 	frankenphp {
-		num_threads auto
 		max_threads auto
-		max_wait_time 10
+		max_wait_time 5
 	}
 }
 
@@ -493,19 +497,43 @@ EOF
 start_services() {
     progress "Khởi động các dịch vụ..."
     
+    # Kiểm tra Caddyfile trước khi khởi động
+    if ! frankenphp validate --config /etc/frankenphp/Caddyfile >/dev/null 2>&1; then
+        warning "Caddyfile có lỗi, đang sửa..."
+        # Tạo lại Caddyfile với cấu hình đơn giản
+        cat > /etc/frankenphp/Caddyfile << 'EOF'
+{
+	frankenphp {
+		num_threads 0
+		max_threads 0
+		max_wait_time 10
+	}
+}
+
+import /var/www/*/Caddyfile
+EOF
+    fi
+    
     # Start FrankenPHP
     if ! systemctl restart frankenphp >/dev/null 2>&1; then
-        error "Không thể khởi động FrankenPHP service."
+        warning "Không thể khởi động FrankenPHP service, đang thử lại..."
+        sleep 2
+        if ! systemctl restart frankenphp >/dev/null 2>&1; then
+            error "Không thể khởi động FrankenPHP service."
+        fi
     fi
     
     if ! systemctl enable frankenphp >/dev/null 2>&1; then
         warning "Không thể enable FrankenPHP service."
     fi
     
+    # Đợi một chút để service khởi động
+    sleep 3
+    
     if systemctl is-active --quiet frankenphp; then
         success "FrankenPHP đã được khởi động"
     else
-        error "FrankenPHP service không hoạt động."
+        warning "FrankenPHP service chưa hoạt động, nhưng có thể khởi động sau."
     fi
 }
 
@@ -530,6 +558,11 @@ install_wpst_script() {
     # Tạo symlink để có thể chạy từ bất kỳ đâu
     if ! ln -sf "$WPST_DIR/wpst" /usr/local/bin/wpst; then
         warning "Không thể tạo symlink cho WPST script."
+    else
+        # Kiểm tra symlink đã được tạo chưa
+        if [[ ! -L /usr/local/bin/wpst ]]; then
+            warning "Symlink wpst không tồn tại sau khi tạo."
+        fi
     fi
     
     # Tải thư mục lib từ GitHub
@@ -561,6 +594,63 @@ install_wpst_script() {
     fi
     
     success "WPST Panel đã được cài đặt"
+}
+
+# Kiểm tra và sửa lỗi sau cài đặt
+post_install_check() {
+    progress "Kiểm tra cài đặt..."
+    
+    # Kiểm tra FrankenPHP
+    if ! command -v frankenphp >/dev/null 2>&1; then
+        error "FrankenPHP không được cài đặt đúng cách."
+    fi
+    
+    # Kiểm tra MariaDB
+    if ! command -v mysql >/dev/null 2>&1; then
+        error "MariaDB không được cài đặt đúng cách."
+    fi
+    
+    # Kiểm tra WPST script
+    if [[ ! -f "$WPST_DIR/wpst" ]]; then
+        error "WPST script không tồn tại."
+    fi
+    
+    if [[ ! -x "$WPST_DIR/wpst" ]]; then
+        error "WPST script không có quyền thực thi."
+    fi
+    
+    # Kiểm tra symlink
+    if [[ ! -L /usr/local/bin/wpst ]]; then
+        warning "Tạo lại symlink wpst..."
+        ln -sf "$WPST_DIR/wpst" /usr/local/bin/wpst
+    fi
+    
+    # Kiểm tra thư mục /var/www
+    if [[ ! -d /var/www ]]; then
+        warning "Tạo lại thư mục /var/www..."
+        mkdir -p /var/www
+        chown frankenphp:frankenphp /var/www
+        chmod 755 /var/www
+    fi
+    
+    # Kiểm tra Caddyfile
+    if ! frankenphp validate --config /etc/frankenphp/Caddyfile >/dev/null 2>&1; then
+        warning "Caddyfile có lỗi, đang sửa..."
+        # Tạo lại Caddyfile với cấu hình đơn giản
+        cat > /etc/frankenphp/Caddyfile << 'EOF'
+{
+	frankenphp {
+		num_threads 0
+		max_threads 0
+		max_wait_time 10
+	}
+}
+
+import /var/www/*/Caddyfile
+EOF
+    fi
+    
+    success "Kiểm tra cài đặt hoàn thành"
 }
 
 # Hiển thị thông tin hoàn thành
@@ -633,6 +723,7 @@ EOF
     create_frankenphp_config
     start_services
     install_wpst_script
+    post_install_check
     
     show_completion_info
     
