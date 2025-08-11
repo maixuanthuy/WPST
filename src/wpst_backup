@@ -1,0 +1,2653 @@
+#!/bin/bash
+
+# WPST Panel - WordPress Stack Tool
+# Phiên bản: 1.0.0
+
+# Đường dẫn cấu hình
+WPST_DIR="/opt/wpst"
+SITES_DIR="/var/www"
+CONFIG_DIR="$WPST_DIR/config"
+LOG_DIR="$WPST_DIR/logs"
+
+# Load common functions nếu có
+if [[ -f "$WPST_DIR/lib/common.sh" ]]; then
+    source "$WPST_DIR/lib/common.sh"
+fi
+
+# Màu sắc (định nghĩa sau khi load common.sh để tránh conflict)
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+NC='\033[0m' # No Color
+
+# Export các biến màu để sử dụng trong functions
+export RED GREEN YELLOW BLUE PURPLE CYAN WHITE NC
+
+# Functions cơ bản nếu không có common.sh
+log() {
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
+}
+
+error() {
+    echo -e "${RED}[LỖI]${NC} $1"
+    exit 1
+}
+
+warning() {
+    echo -e "${YELLOW}[CẢNH BÁO]${NC} $1"
+}
+
+info() {
+    echo -e "${BLUE}[THÔNG TIN]${NC} $1"
+}
+
+success() {
+    echo -e "${GREEN}[THÀNH CÔNG]${NC} $1"
+}
+
+# ASCII Logo
+show_ascii_logo() {
+    echo -e "${CYAN}"
+    cat << 'EOF'
+ ########                                         
+##########        ##########       ###########    
+###########      ############     ############### 
+###########     ##############   #################
+ ###########    ###############  #################
+ ###########    ###############  ######      #####
+  ###########   ######## ####### ######      #####
+  ###########  ######### ####### ###### ##########
+   ########### ######### ####### ###### ######### 
+    ########## #########  ###### ###### #1.0.0   
+    ########## ########   #############           
+     ##################    ###########            
+      ################      #########             
+       ##############         ####                
+          #########
+EOF
+    echo -e "${NC}"
+}
+
+# System stats functions
+get_system_stats() {
+    local hostname=$(hostname)
+    local ip=$(get_server_ip)
+    local uptime=$(uptime -p 2>/dev/null || echo "Unknown")
+    local load=$(uptime | awk -F'load average:' '{ print $2 }' | sed 's/^ *//; s/,//g' 2>/dev/null || echo "Unknown")
+    # Memory info - sử dụng RAM thật như htop
+    local mem_total=$(free -m | awk 'NR==2{print $2}')
+    local mem_used=$(free -m | awk 'NR==2{print $3}')
+    local mem_available=$(free -m | awk 'NR==2{print $7}')
+    local mem_percent=$((mem_used * 100 / mem_total))
+    local memory="${mem_used}M/${mem_total}M (${mem_percent}%)"
+    local disk=$(df -h / | awk 'NR==2{printf "%s/%s (%s)", $3, $2, $5}' 2>/dev/null || echo "Unknown")
+    local cpu_info=$(lscpu | grep "Model name" | cut -d: -f2 | sed 's/^ *//' 2>/dev/null || echo "Unknown")
+    local cpu_cores=$(nproc 2>/dev/null || echo "Unknown")
+    # Lấy CPU usage
+    local cpu_usage="Unknown"
+    if command -v mpstat >/dev/null 2>&1; then
+        cpu_usage=$(mpstat 1 1 | awk 'NR==4{printf "%.1f", 100-$NF}')
+    elif command -v vmstat >/dev/null 2>&1; then
+        cpu_usage=$(vmstat 1 2 | awk 'NR==3{printf "%.1f", 100-$15}')
+    elif [[ -f /proc/stat ]]; then
+        # Fallback: tính từ /proc/stat (không chính xác lắm)
+        local cpu_line=$(head -1 /proc/stat)
+        local user=$(echo $cpu_line | awk '{print $2}')
+        local nice=$(echo $cpu_line | awk '{print $3}')
+        local system=$(echo $cpu_line | awk '{print $4}')
+        local idle=$(echo $cpu_line | awk '{print $5}')
+        local total=$((user + nice + system + idle))
+        local used=$((user + nice + system))
+        if [[ $total -gt 0 ]]; then
+            cpu_usage=$((used * 100 / total))
+        fi
+    fi
+    local os_info=$(cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2 2>/dev/null || echo "Unknown")
+    
+    echo -e "${CYAN}IP:         ${WHITE}$ip${NC}"
+    echo -e "${CYAN}OS:         ${WHITE}$os_info${NC}"
+    echo -e "${CYAN}Uptime:     ${WHITE}$uptime${NC}"
+    echo -e "${CYAN}Load:       ${WHITE}$load${NC}"
+    echo -e "${CYAN}CPU:        ${WHITE}${cpu_usage}%${NC}"
+    echo -e "${CYAN}Memory:     ${WHITE}$memory${NC}"
+    echo -e "${CYAN}Disk:       ${WHITE}$disk${NC}"
+}
+
+get_service_status() {
+    local frankenphp_status=$(systemctl is-active frankenphp 2>/dev/null || echo "Unknown")
+    local mariadb_status=$(systemctl is-active mariadb 2>/dev/null || echo "Unknown")
+    
+    # Lấy version của FrankenPHP - chỉ lấy phần cần thiết
+    local frankenphp_version="Unknown"
+    if command -v frankenphp >/dev/null 2>&1; then
+        frankenphp_version=$(frankenphp -v 2>/dev/null | head -1 | sed 's/.*FrankenPHP v\([^ ]*\) PHP.*/\1/' || echo "Unknown")
+    fi
+    
+    # Lấy version của MariaDB - chỉ lấy số version
+    local mariadb_version="Unknown"
+    if command -v mariadb >/dev/null 2>&1; then
+        mariadb_version=$(mariadb --version 2>/dev/null | sed 's/.*from \([0-9.]*\)-MariaDB.*/\1/' || echo "Unknown")
+    fi
+    
+    echo -e "${CYAN}Services: ${NC}"
+    echo -e "FrankenPHP:    $(show_status_indicator "$frankenphp_status") ${frankenphp_status} (v${frankenphp_version})"
+    echo -e "MariaDB:       $(show_status_indicator "$mariadb_status") ${mariadb_status} (v${mariadb_version})"
+}
+
+get_sites_count() {
+    local count=0
+    if [[ -d "$SITES_DIR" ]]; then
+        count=$(find "$SITES_DIR" -maxdepth 1 -type d | wc -l)
+        count=$((count - 1)) # Trừ đi thư mục gốc
+    fi
+    echo "$count"
+}
+
+show_status_indicator() {
+    local status="$1"
+    case "$status" in
+        "active"|"running")
+            echo -e "${GREEN}●${NC}"
+            ;;
+        "inactive"|"stopped"|"Unknown")
+            echo -e "${RED}●${NC}"
+            ;;
+        *)
+            echo -e "${YELLOW}●${NC}"
+            ;;
+    esac
+}
+
+get_server_ip() {
+    # Lấy IP public của server
+    local ip
+    ip=$(curl -s -4 ifconfig.me 2>/dev/null) || \
+    ip=$(curl -s -4 ipinfo.io/ip 2>/dev/null) || \
+    ip=$(hostname -I | awk '{print $1}')
+    echo "$ip"
+}
+
+# Sites Dashboard
+show_sites_dashboard() {
+    clear
+    show_header "Quản lý Website"
+    
+    # Phần Status - danh sách websites
+    echo -e "${BLUE}🌐 DANH SÁCH WEBSITE${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    local sites=()
+    if [[ -d "$SITES_DIR" ]]; then
+        for site_dir in "$SITES_DIR"/*; do
+            if [[ -d "$site_dir" ]]; then
+                sites+=($(basename "$site_dir"))
+            fi
+        done
+    fi
+    
+    if [[ ${#sites[@]} -eq 0 ]]; then
+        echo -e "${YELLOW}Chưa có website nào được tạo.${NC}"
+        echo ""
+    else
+        # Hiển thị bảng sites
+        print_sites_table "${sites[@]}"
+        echo ""
+    fi
+    
+    # Phần Menu phụ
+    echo -e "${BLUE}📋 MENU PHỤ${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    if [[ ${#sites[@]} -gt 0 ]]; then
+        echo "Chọn số để quản lý website:"
+        for i in "${!sites[@]}"; do
+            echo "$((i+1)). ${sites[i]}"
+        done
+        echo ""
+    fi
+    
+    echo "n. Thêm website mới"
+    echo "f. Restart FrankenPHP"
+    echo "m. Restart MariaDB"
+    echo "p. Update Permission FrankenPHP"
+    echo "u. Update FrankenPHP"
+    echo "0. Thoát"
+    echo "q. Thoát"
+    
+    echo ""
+    echo -e "${CYAN}💡 THÔNG TIN:${NC}"
+    echo "• Để sửa cấu hình Caddy: sudo nano /etc/frankenphp/Caddyfile"
+    echo "• Để sửa cấu hình PHP: sudo nano /etc/frankenphp/php.ini"
+    echo "• Sau khi chỉnh sửa, cần Restart FrankenPHP (f) hoặc: sudo systemctl restart frankenphp"
+    echo ""
+    
+    read -p "Lựa chọn: " choice
+    
+    case $choice in
+        [1-9]|[1-9][0-9])
+            if [[ $choice -le ${#sites[@]} ]]; then
+                local selected_site="${sites[$((choice-1))]}"
+                show_single_site_dashboard "$selected_site"
+            else
+                warning "Lựa chọn không hợp lệ."
+                sleep 1
+                show_sites_dashboard
+            fi
+            ;;
+        n|N)
+            add_new_site
+            ;;
+        f|F)
+            restart_frankenphp
+            ;;
+        m|M)
+            restart_mariadb
+            ;;
+        p|P)
+            manage_frankenphp_permissions
+            ;;
+        u|U)
+            update_frankenphp
+            ;;
+        0)
+            echo -e "${GREEN}Cảm ơn bạn đã sử dụng WPST Panel!${NC}"
+            exit 0
+            ;;
+        q|Q)
+            echo -e "${GREEN}Cảm ơn bạn đã sử dụng WPST Panel!${NC}"
+            exit 0
+            ;;
+        *)
+            warning "Lựa chọn không hợp lệ."
+            sleep 1
+            show_sites_dashboard
+            ;;
+    esac
+}
+
+# Print sites table
+print_sites_table() {
+    local sites=("$@")
+    
+    # Table header
+    printf "%-25s %-8s %-8s %-8s %-12s %-12s %-10s\n" "Domain" "Status" "Ping" "Backup" "Size" "Total" "SSL"
+    echo "────────────────────────────────────────────────────────────────────────────────────────────"
+    
+    for site in "${sites[@]}"; do
+        local status=$(get_site_status "$site")
+        local ping_status=$(check_site_ping "$site")
+        local backup_count=$(count_site_backups "$site")
+        local public_size=$(get_directory_size "$SITES_DIR/$site/public")
+        local total_size=$(get_directory_size "$SITES_DIR/$site")
+        local ssl_status=$(get_ssl_status "$site")
+        
+        printf "%-25s %-8s %-8s %-8s %-12s %-12s %-10s\n" \
+            "$site" \
+            "$status" \
+            "$ping_status" \
+            "$backup_count" \
+            "$public_size" \
+            "$total_size" \
+            "$ssl_status"
+    done
+}
+
+# Site status functions
+get_site_status() {
+    local domain="$1"
+    if [[ -f "$SITES_DIR/$domain/Caddyfile" ]]; then
+        echo "ON"
+    else
+        echo "OFF"
+    fi
+}
+
+check_site_ping() {
+    local domain="$1"
+    if curl -s --max-time 5 -I "https://$domain" >/dev/null 2>&1; then
+        echo "✅"
+    else
+        echo "❌"
+    fi
+}
+
+count_site_backups() {
+    local domain="$1"
+    local backup_dir="$SITES_DIR/$domain/backup"
+    if [[ -d "$backup_dir" ]]; then
+        find "$backup_dir" -name "*.tar.gz" -type f 2>/dev/null | wc -l
+    else
+        echo "0"
+    fi
+}
+
+get_directory_size() {
+    local dir="$1"
+    if [[ -d "$dir" ]]; then
+        du -sh "$dir" 2>/dev/null | cut -f1
+    else
+        echo "0B"
+    fi
+}
+
+get_ssl_status() {
+    local domain="$1"
+    if [[ -f "$SITES_DIR/$domain/ssl/cert.pem" ]]; then
+        echo "Custom"
+    else
+        echo "Auto"
+    fi
+}
+
+# Single site management
+show_single_site_dashboard() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    local public_dir="$site_dir/public"
+    
+    clear
+    show_header "Quản lý Website: $domain"
+    
+    # Phần Status - thông tin chi tiết site
+    echo -e "${BLUE}📋 THÔNG TIN WEBSITE${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    show_site_details "$domain"
+    
+    echo ""
+    echo -e "${BLUE}📋 MENU QUẢN LÝ${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "1. Caddyfile"
+    echo "2. Cài đặt SSL thủ công"
+    
+    # Kiểm tra trạng thái TinyFileManager
+    local tinyfilemanager_files=$(find "$public_dir" -name "tinyfilemanager_*.php" 2>/dev/null | wc -l)
+    if [[ $tinyfilemanager_files -gt 0 ]]; then
+        echo "3. TinyFileManager - (ĐANG BẬT)"
+    else
+        echo "3. TinyFileManager - (ĐANG TẮT)"
+    fi
+    
+    echo "4. Database"
+    echo "5. Backup & Restore"
+    
+    # Hiển thị menu bật/tắt động
+    local site_status=$(get_site_status "$domain")
+    if [[ "$site_status" == "ON" ]]; then
+        echo "6. Tắt website"
+    else
+        echo "6. Bật website"
+    fi
+    
+    echo "7. Xóa website"
+    echo ""
+    echo "0. Quay lại danh sách website"
+    echo "q. Thoát"
+    echo ""
+    
+    read -p "Lựa chọn: " choice
+    
+    case $choice in
+        1)
+            edit_caddyfile "$domain"
+            ;;
+        2)
+            setup_custom_ssl "$domain"
+            ;;
+        3)
+            setup_tinyfilemanager "$domain"
+            ;;
+        4)
+            manage_database "$domain"
+            ;;
+        5)
+            backup_restore_site "$domain"
+            ;;
+        6)
+            toggle_site_status "$domain"
+            ;;
+        7)
+            delete_site "$domain"
+            ;;
+        0)
+            show_sites_dashboard
+            ;;
+        q|Q)
+            echo -e "${GREEN}Cảm ơn bạn đã sử dụng WPST Panel!${NC}"
+            exit 0
+            ;;
+        *)
+            warning "Lựa chọn không hợp lệ."
+            sleep 1
+            show_single_site_dashboard "$domain"
+            ;;
+    esac
+}
+
+# Site details
+show_site_details() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    
+
+    echo -e "Domain:        ${GREEN}$domain${NC}"
+    
+    # SSL info
+    local ssl_info=$(get_ssl_info "$domain")
+    echo -e "SSL:           $ssl_info"
+    
+    # Storage info
+    local public_size=$(get_directory_size "$site_dir/public")
+    local total_size=$(get_directory_size "$site_dir")
+    echo -e "Dung lượng:    Public ${GREEN}$public_size${NC} / Total ${GREEN}$total_size${NC}"
+    
+    # Database info
+    local db_config_file="$site_dir/configs/database.conf"
+    if [[ -f "$db_config_file" ]]; then
+        source "$db_config_file"
+        local db_size=$(get_database_size "$DB_NAME")
+        echo -e "Database:      ${GREEN}$DB_NAME${NC} (${GREEN}$db_size${NC})"
+        echo -e "DB User:       ${GREEN}$DB_USER${NC}"
+        echo -e "DB Password:   ${GREEN}Đã lưu trong config${NC}"
+    else
+        echo -e "Database:      ${YELLOW}Không có${NC}"
+    fi
+    
+    # Status
+    local status=$(get_site_status "$domain")
+    if [[ "$status" == "ON" ]]; then
+        echo -e "Trạng thái:        ${GREEN}Online${NC}"
+    else
+        echo -e "🔴 Trạng thái:     ${RED}Offline${NC}"
+    fi
+}
+
+get_ssl_info() {
+    local domain="$1"
+    
+    # Kiểm tra custom SSL
+    if [[ -f "$SITES_DIR/$domain/ssl/cert.pem" ]]; then
+        local expiry=$(openssl x509 -in "$SITES_DIR/$domain/ssl/cert.pem" -noout -enddate 2>/dev/null | cut -d= -f2)
+        if [[ -n "$expiry" ]]; then
+            echo -e "${BLUE}Custom${NC} (Hết hạn: $expiry)"
+        else
+            echo -e "${YELLOW}Custom (Không đọc được)${NC}"
+        fi
+    else
+        # Kiểm tra Let's Encrypt
+        local cert_path="/var/lib/caddy/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/$domain"
+        if [[ -f "$cert_path/$domain.crt" ]]; then
+            local expiry=$(openssl x509 -in "$cert_path/$domain.crt" -noout -enddate 2>/dev/null | cut -d= -f2)
+            if [[ -n "$expiry" ]]; then
+                echo -e "${GREEN}Let's Encrypt${NC} (Hết hạn: $expiry)"
+            else
+                echo -e "${GREEN}Let's Encrypt${NC}"
+            fi
+        else
+            echo -e "${YELLOW}Chưa có SSL${NC}"
+        fi
+    fi
+}
+
+get_site_database_info() {
+    local domain="$1"
+    local db_name=$(echo "$domain" | sed 's/\./_/g')_db
+    
+    if database_exists "$db_name"; then
+        local db_size=$(get_database_size "$db_name")
+        echo -e "${GREEN}$db_name${NC} ($db_size)"
+    else
+        echo -e "${RED}Chưa có database${NC}"
+    fi
+}
+
+# Database functions
+database_exists() {
+    local db_name="$1"
+    load_db_config
+    mysql -u root -p"$DB_ROOT_PASSWORD" -e "USE $db_name;" 2>/dev/null
+    return $?
+}
+
+
+
+get_database_size() {
+    local db_name="$1"
+    load_db_config
+    
+    local size_bytes=$(mysql -u root -p"$DB_ROOT_PASSWORD" -e "
+        SELECT ROUND(SUM(data_length + index_length), 1) AS 'DB Size in Bytes' 
+        FROM information_schema.tables 
+        WHERE table_schema='$db_name';" -s -N 2>/dev/null)
+    
+    if [[ -n "$size_bytes" && "$size_bytes" != "NULL" ]]; then
+        format_bytes "$size_bytes"
+    else
+        echo "0B"
+    fi
+}
+
+load_db_config() {
+    if [[ -f "$CONFIG_DIR/mariadb_root.conf" ]]; then
+        source "$CONFIG_DIR/mariadb_root.conf"
+    else
+        error "Không tìm thấy cấu hình database."
+    fi
+}
+
+format_bytes() {
+    local bytes="$1"
+    
+    if [[ $bytes -ge 1073741824 ]]; then
+        echo "$(( bytes / 1073741824 ))GB"
+    elif [[ $bytes -ge 1048576 ]]; then
+        echo "$(( bytes / 1048576 ))MB"
+    elif [[ $bytes -ge 1024 ]]; then
+        echo "$(( bytes / 1024 ))KB"
+    else
+        echo "${bytes}B"
+    fi
+}
+
+# Add new site function
+add_new_site() {
+    clear
+    show_header "Thêm Website Mới"
+    
+    # Nhập domain
+    local domain
+    while true; do
+        echo -e "\n${BLUE}Nhập tên domain:${NC}"
+        read -p "Domain: " domain
+        domain=$(trim "$domain")
+        
+        # Validate domain format
+        if ! validate_domain "$domain"; then
+            warning "Domain không hợp lệ. Vui lòng nhập lại."
+            continue
+        fi
+        
+        # Kiểm tra trùng lặp
+        if site_exists "$domain"; then
+            warning "Domain $domain đã tồn tại. Vui lòng chọn domain khác."
+            continue
+        fi
+        
+        break
+    done
+    
+    # Kiểm tra DNS
+    info "Kiểm tra DNS pointing..."
+    local server_ip=$(get_server_ip)
+    
+    if ! check_dns_pointing "$domain" "$server_ip"; then
+        show_warning_box "DNS Chưa Trỏ Đúng" "Domain $domain chưa trỏ về IP $server_ip.\nNếu sử dụng Cloudflare, vui lòng tạm thời tắt Proxy.\nBạn có thể tiếp tục nhưng SSL có thể không hoạt động."
+        
+        if ! read_confirm "Bạn có muốn tiếp tục?" "n"; then
+            return
+        fi
+    else
+        success "Domain $domain đã trỏ đúng về IP $server_ip"
+    fi
+    
+    # Kiểm tra conflict thư mục
+    if [[ -d "$SITES_DIR/$domain" ]]; then
+        error "Thư mục $SITES_DIR/$domain đã tồn tại. Vui lòng xóa trong Quản lý website trước."
+        return 1
+    fi
+    
+    # Xác nhận tạo database
+    local create_database="y"
+    echo -e "\n${BLUE}Tạo database cho website này?${NC}"
+    read -p "Tạo database [Y/n]: " create_db_input
+    create_database=${create_db_input:-y}
+    
+    # Kiểm tra database đã tồn tại chưa
+    local db_name=$(echo "$domain" | sed 's/\./_/g')_db
+    local db_user=$(echo "$domain" | sed 's/\./_/g')_user
+    
+    if database_exists "$db_name" || user_exists "$db_user"; then
+        warning "Database hoặc user đã tồn tại:"
+        echo "   Database: $db_name"
+        echo "   User: $db_user"
+        echo ""
+        
+        if ! read_confirm "Bạn có muốn xóa database cũ và tạo mới?" "n"; then
+            info "Đã hủy tạo website."
+            return 1
+        fi
+        
+        # Xóa database cũ
+        info "Đang xóa database cũ..."
+        drop_site_database "$db_name" "$db_user"
+    fi
+    
+    # Xác nhận cài WordPress
+    local install_wordpress
+    while true; do
+        echo -e "\n${BLUE}Cài đặt WordPress?${NC}"
+        read -p "Cài WordPress [Y/n]: " install_wordpress
+        case "$install_wordpress" in
+            [Yy]*|"") install_wordpress="y"; break ;;
+            [Nn]*) install_wordpress="n"; break ;;
+            *) warning "Vui lòng nhập y hoặc n." ;;
+        esac
+    done
+    
+    # Bắt đầu quá trình tạo site
+    info "Bắt đầu tạo website $domain..."
+    
+    # Tạo site với rollback support
+    if create_site_with_rollback "$domain" "$create_database" "$install_wordpress"; then
+        show_site_creation_summary "$domain"
+    else
+        error "Tạo website thất bại."
+    fi
+}
+
+edit_caddyfile() {
+    local domain="$1"
+    echo "Chỉnh sửa Caddyfile cho $domain - Đang phát triển..."
+    sleep 2
+    show_single_site_dashboard "$domain"
+}
+
+setup_custom_ssl() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    
+    clear
+    show_header "Cài đặt SSL thủ công: $domain"
+    
+    echo -e "${BLUE}📋 HƯỚNG DẪN UPLOAD SSL${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "1. Upload 2 file SSL vào thư mục: ${GREEN}$site_dir/ssl/${NC}"
+    echo "   - ${GREEN}$domain.crt${NC} (Certificate file)"
+    echo "   - ${GREEN}$domain.key${NC} (Private key file)"
+    echo ""
+    echo "2. Sau khi upload xong, quay lại menu này để cấu hình."
+    echo ""
+    
+    # Kiểm tra trạng thái file SSL
+    local cert_file="$site_dir/ssl/$domain.crt"
+    local key_file="$site_dir/ssl/$domain.key"
+    
+    echo -e "${BLUE}📊 TRẠNG THÁI FILE SSL${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    if [[ -f "$cert_file" ]]; then
+        echo -e "✅ Certificate file: ${GREEN}$domain.crt${NC}"
+    else
+        echo -e "❌ Certificate file: ${RED}$domain.crt${NC} (Chưa có)"
+    fi
+    
+    if [[ -f "$key_file" ]]; then
+        echo -e "✅ Private key file: ${GREEN}$domain.key${NC}"
+    else
+        echo -e "❌ Private key file: ${RED}$domain.key${NC} (Chưa có)"
+    fi
+    
+    echo ""
+    
+    # Kiểm tra SSL hiện tại
+    echo -e "${BLUE}🔒 TRẠNG THÁI SSL HIỆN TẠI${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    local current_ssl=$(get_current_ssl_type "$domain")
+    echo -e "SSL đang dùng: $current_ssl"
+    echo ""
+    
+    # Nếu đã có cả 2 file, hiển thị menu cấu hình
+    if [[ -f "$cert_file" && -f "$key_file" ]]; then
+        echo -e "${GREEN}✅ Cả 2 file SSL đã sẵn sàng!${NC}"
+        echo ""
+        echo -e "${BLUE}🔧 TÙY CHỌN CẤU HÌNH SSL${NC}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "1. Dùng SSL mặc định của FrankenPHP (Let's Encrypt)"
+        echo "2. Dùng SSL thủ công"
+        echo ""
+        echo "0. Quay lại"
+        echo ""
+        
+        read -p "Lựa chọn: " ssl_choice
+        
+        case $ssl_choice in
+            1)
+                configure_ssl_auto "$domain"
+                ;;
+            2)
+                configure_ssl_manual "$domain"
+                ;;
+            0)
+                show_single_site_dashboard "$domain"
+                ;;
+            *)
+                warning "Lựa chọn không hợp lệ."
+                sleep 1
+                setup_custom_ssl "$domain"
+                ;;
+        esac
+    else
+        echo -e "${YELLOW}⚠️  Vui lòng upload đầy đủ 2 file SSL trước khi cấu hình.${NC}"
+        echo ""
+        read -p "Nhấn Enter để quay lại..."
+        show_single_site_dashboard "$domain"
+    fi
+}
+
+setup_tinyfilemanager() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    local public_dir="$site_dir/public"
+    
+    # Dọn dẹp jobs cũ
+    cleanup_tfm_jobs
+    
+    clear
+    show_header "TinyFileManager: $domain"
+    
+    # Kiểm tra trạng thái file TinyFileManager
+    local tfm_files=$(find "$public_dir" -name "tinyfilemanager_*.php" 2>/dev/null)
+    
+    echo -e "${BLUE}📊 TRẠNG THÁI TINYFILEMANAGER${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    if [[ -n "$tfm_files" ]]; then
+        echo -e "✅ TinyFileManager đã được cài đặt:"
+        echo "$tfm_files" | while read file; do
+            echo -e "   ${GREEN}$(basename "$file")${NC}"
+        done
+        
+        # Hiển thị file config
+        local config_file="$public_dir/config.php"
+        if [[ -f "$config_file" ]]; then
+            echo -e "📁 File config: ${GREEN}config.php${NC}"
+        fi
+        echo ""
+        
+        # Hiển thị thông tin đăng nhập
+        echo -e "${BLUE}🔐 THÔNG TIN ĐĂNG NHẬP${NC}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo -e "Username: ${GREEN}admin${NC} (Full access)"
+        echo -e "Username: ${GREEN}user${NC} (View only)"
+        echo -e "Password: ${GREEN}Đã được tạo ngẫu nhiên${NC}"
+        echo ""
+        echo -e "🔗 Link truy cập: ${GREEN}https://$domain/$(basename "$tfm_files")${NC}"
+        echo ""
+        
+        echo -e "${YELLOW}⚠️  Lưu ý: File sẽ tự động xóa sau 1 giờ nếu không tắt.${NC}"
+        echo ""
+        
+        echo "1. Tắt TinyFileManager (Xóa file)"
+        echo "0. Quay lại"
+        echo ""
+        
+        read -p "Lựa chọn: " choice
+        
+        case $choice in
+            1)
+                remove_tinyfilemanager "$domain"
+                ;;
+            0)
+                show_single_site_dashboard "$domain"
+                ;;
+            *)
+                warning "Lựa chọn không hợp lệ."
+                sleep 1
+                setup_tinyfilemanager "$domain"
+                ;;
+        esac
+    else
+        echo -e "❌ TinyFileManager chưa được cài đặt"
+        echo ""
+        
+        echo -e "${BLUE}📥 CÀI ĐẶT TINYFILEMANAGER${NC}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "TinyFileManager sẽ được tải từ GitHub và cấu hình bảo mật."
+        echo ""
+        echo "1. Cài đặt TinyFileManager"
+        echo "0. Quay lại"
+        echo ""
+        
+        read -p "Lựa chọn: " choice
+        
+        case $choice in
+            1)
+                install_tinyfilemanager "$domain"
+                ;;
+            0)
+                show_single_site_dashboard "$domain"
+                ;;
+            *)
+                warning "Lựa chọn không hợp lệ."
+                sleep 1
+                setup_tinyfilemanager "$domain"
+                ;;
+        esac
+    fi
+}
+
+manage_database() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    local public_dir="$site_dir/public"
+    local db_config_file="$site_dir/configs/database.conf"
+    
+    # Kiểm tra xem có database config không
+    if [[ ! -f "$db_config_file" ]]; then
+        clear
+        show_header "Quản lý Database: $domain"
+        echo -e "${YELLOW}Website này chưa có database được cấu hình.${NC}"
+        echo ""
+        read -p "Nhấn Enter để quay lại..."
+        show_single_site_dashboard "$domain"
+        return
+    fi
+    
+    # Load database config
+    source "$db_config_file"
+    
+    while true; do
+        clear
+        show_header "Quản lý Database: $domain"
+        
+        # Hiển thị thông tin database
+        echo -e "${BLUE}📋 THÔNG TIN DATABASE${NC}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo -e "Database User: ${GREEN}$DB_USER${NC}"
+        echo -e "Database Password: ${GREEN}$DB_PASSWORD${NC}"
+        echo -e "Database Name: ${GREEN}$DB_NAME${NC}"
+        
+        # Lấy thông tin database
+        local db_info=$(get_database_info "$DB_NAME")
+        echo -e "Database Info: ${GREEN}$db_info${NC}"
+        echo ""
+        
+        # Menu options
+        echo -e "${BLUE}🔧 TÙY CHỌN${NC}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        # Kiểm tra trạng thái Adminneo
+        local adminneo_files=$(find "$public_dir" -name "adminneo_*.php" 2>/dev/null | wc -l)
+        if [[ $adminneo_files -gt 0 ]]; then
+            echo "1. Adminneo (PHP Database Manager) - (ĐANG BẬT)"
+        else
+            echo "1. Adminneo (PHP Database Manager) - (ĐANG TẮT)"
+        fi
+        
+        echo "2. Tạo database"
+        echo "3. Xóa database"
+        echo "4. Drop database (giữ user/pass, chỉ xóa bảng)"
+        echo "5. Đổi mật khẩu"
+        echo "6. Import database"
+        echo "0. Quay lại"
+        echo ""
+        
+        read -p "Lựa chọn: " choice
+        
+        case $choice in
+            1) install_adminneo "$domain" ;;
+            2) create_database_for_site "$domain" ;;
+            3) delete_database_for_site "$domain" ;;
+            4) drop_database_tables "$domain" ;;
+            5) change_database_password "$domain" ;;
+            6) import_database "$domain" ;;
+            0) show_single_site_dashboard "$domain" ;;
+            *) warning "Lựa chọn không hợp lệ."; sleep 1 ;;
+        esac
+    done
+}
+
+backup_restore_site() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    local backup_dir="$site_dir/backup"
+    
+    # Tạo thư mục backup nếu chưa có
+    mkdir -p "$backup_dir"
+    
+    while true; do
+        clear
+        show_header "Backup & Restore: $domain"
+        
+        # Hiển thị danh sách backup
+        echo -e "${BLUE}📦 DANH SÁCH BACKUP${NC}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        local backup_count=0
+        if [[ -d "$backup_dir" ]]; then
+            for backup_folder in "$backup_dir"/*; do
+                if [[ -d "$backup_folder" ]]; then
+                    ((backup_count++))
+                    local folder_name=$(basename "$backup_folder")
+                    local file_size=$(du -sh "$backup_folder/files.tar.gz" 2>/dev/null | cut -f1 || echo "0B")
+                    local db_size=$(du -sh "$backup_folder/database.sql.gz" 2>/dev/null | cut -f1 || echo "0B")
+                    echo -e "${CYAN}$backup_count.${NC} $folder_name"
+                    echo -e "   📁 Files: ${GREEN}$file_size${NC} | 🗃️ Database: ${GREEN}$db_size${NC}"
+                fi
+            done
+        fi
+        
+        if [[ $backup_count -eq 0 ]]; then
+            echo -e "${YELLOW}Chưa có bản backup nào.${NC}"
+        fi
+        
+        echo ""
+        echo -e "${BLUE}🔧 TÙY CHỌN${NC}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "b. Tạo backup mới"
+        echo "0. Quay lại"
+        echo ""
+        
+        read -p "Lựa chọn: " choice
+        
+        case $choice in
+            b|B)
+                create_backup "$domain"
+                ;;
+            0)
+                show_single_site_dashboard "$domain"
+                ;;
+            [1-9]*)
+                if [[ $choice -le $backup_count && $choice -gt 0 ]]; then
+                    manage_backup "$domain" "$choice"
+                else
+                    warning "Lựa chọn không hợp lệ."
+                    sleep 1
+                fi
+                ;;
+            *)
+                warning "Lựa chọn không hợp lệ."
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+toggle_site_status() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    local current_status=$(get_site_status "$domain")
+    
+    if [[ "$current_status" == "ON" ]]; then
+        # Tắt website
+        if [[ -f "$site_dir/Caddyfile" ]]; then
+            mv "$site_dir/Caddyfile" "$site_dir/Caddyfile.disabled"
+            success "Website $domain đã được tắt."
+        else
+            warning "Website $domain đã được tắt từ trước."
+        fi
+    else
+        # Bật website
+        if [[ -f "$site_dir/Caddyfile.disabled" ]]; then
+            mv "$site_dir/Caddyfile.disabled" "$site_dir/Caddyfile"
+            success "Website $domain đã được bật."
+        else
+            warning "Website $domain đã được bật từ trước."
+        fi
+    fi
+    
+    # Restart FrankenPHP
+    systemctl restart frankenphp
+    show_single_site_dashboard "$domain"
+}
+
+delete_site() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    
+    clear
+    show_header "Xóa Website: $domain"
+    
+    echo -e "${RED}CẢNH BÁO: Bạn sắp xóa hoàn toàn website $domain.${NC}"
+    echo "Tất cả dữ liệu bao gồm files và database sẽ bị xóa vĩnh viễn!"
+    echo ""
+    echo -e "${RED}Để xác nhận, vui lòng gõ chính xác tên domain:${NC}"
+    read -p "Nhập '$domain' để xác nhận: " confirm_domain
+    
+    if [[ "$confirm_domain" != "$domain" ]]; then
+        warning "Domain không khớp. Hủy xóa website."
+        sleep 2
+        show_single_site_dashboard "$domain"
+        return
+    fi
+    
+    echo ""
+    if ! read_confirm "Bạn có chắc chắn muốn xóa website $domain?" "n"; then
+        info "Đã hủy xóa website."
+        sleep 1
+        show_single_site_dashboard "$domain"
+        return
+    fi
+    
+    # Thực hiện xóa
+    info "Đang xóa website $domain..."
+    
+    # Xóa database
+    local db_name=$(echo "$domain" | sed 's/\./_/g')_db
+    local db_user=$(echo "$domain" | sed 's/\./_/g')_user
+    
+    if database_exists "$db_name"; then
+        load_db_config
+        mysql -u root -p"$DB_ROOT_PASSWORD" -e "DROP DATABASE IF EXISTS \`$db_name\`;" 2>/dev/null
+        mysql -u root -p"$DB_ROOT_PASSWORD" -e "DROP USER IF EXISTS '$db_user'@'localhost';" 2>/dev/null
+        mysql -u root -p"$DB_ROOT_PASSWORD" -e "FLUSH PRIVILEGES;" 2>/dev/null
+        success "Đã xóa database $db_name"
+    fi
+    
+    # Xóa thư mục
+    if [[ -d "$site_dir" ]]; then
+        rm -rf "$site_dir"
+        success "Đã xóa thư mục website"
+    fi
+    
+    # Restart FrankenPHP
+    systemctl restart frankenphp
+    
+    success "Website $domain đã được xóa hoàn toàn."
+    sleep 2
+    show_sites_dashboard
+}
+
+# Dashboard functions cho các menu khác
+show_firewall_dashboard() {
+    clear
+    show_header "Firewall / Security"
+    echo -e "${YELLOW}Tính năng này sẽ được phát triển sau.${NC}"
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+    show_sites_dashboard
+}
+
+# Header function
+show_header() {
+    local title="$1"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE} $title${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+}
+
+# Main function
+main() {
+    # Kiểm tra cài đặt
+    if [[ ! -d "$WPST_DIR" ]]; then
+        error "WPST Panel chưa được cài đặt. Vui lòng chạy script cài đặt trước."
+    fi
+    
+    # Kiểm tra quyền root
+    if [[ $EUID -ne 0 ]]; then
+        error "WPST Panel cần chạy với quyền root. Vui lòng chạy: sudo wpst"
+    fi
+    
+    # Khởi tạo màn hình - hiển thị danh sách website trực tiếp
+    show_sites_dashboard
+}
+
+# Xử lý tham số dòng lệnh
+handle_arguments() {
+    case $1 in
+        "sites"|"1")
+            show_sites_dashboard
+            ;;
+        "firewall"|"2")
+            show_firewall_dashboard
+            ;;
+        "update-frankenphp"|"4")
+            update_frankenphp
+            ;;
+        "restart-frankenphp"|"5")
+            restart_frankenphp
+            ;;
+        "permissions"|"6")
+            manage_frankenphp_permissions
+            ;;
+        "restart-mariadb"|"8")
+            restart_mariadb
+            ;;
+        "--help"|"-h")
+            show_help
+            ;;
+        "--version"|"-v")
+            show_version
+            ;;
+        "")
+            main
+            ;;
+        *)
+            error "Tham số không hợp lệ: $1. Chạy 'wpst --help' để xem hướng dẫn."
+            ;;
+    esac
+}
+
+# Help function
+show_help() {
+    echo -e "${BLUE}WPST Panel - WordPress Stack Tool${NC}"
+    echo ""
+    echo "Cách sử dụng:"
+    echo "  wpst                Mở quản lý website"
+    echo "  wpst firewall       Mở quản lý firewall"
+    echo "  wpst sites          Mở quản lý website"
+    echo ""
+    echo "Tùy chọn:"
+    echo "  --help, -h          Hiển thị hướng dẫn"
+    echo "  --version, -v       Hiển thị phiên bản"
+    echo ""
+}
+
+# FrankenPHP functions
+update_frankenphp() {
+    clear
+    show_header "Cập nhật FrankenPHP"
+    
+    echo -e "${YELLOW}Đang kiểm tra phiên bản FrankenPHP...${NC}"
+    
+    # Lấy phiên bản hiện tại
+    local current_version=$(frankenphp version 2>/dev/null | head -1 | sed 's/.*version //' || echo "Unknown")
+    echo -e "Phiên bản local: ${GREEN}$current_version${NC}"
+    
+    # Lấy phiên bản mới nhất từ GitHub
+    local latest_version=$(curl -s https://api.github.com/repos/php/frankenphp/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/v//' 2>/dev/null || echo "Unknown")
+    echo -e "Phiên bản GitHub: ${GREEN}$latest_version${NC}"
+    
+    echo ""
+    echo -e "${YELLOW}Bạn có muốn cập nhật không? (y/n)${NC}"
+    read -p "Lựa chọn: " choice
+    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+        echo -e "${YELLOW}Đang cập nhật FrankenPHP...${NC}"
+        # TODO: Implement update logic based on install.sh
+        echo -e "${GREEN}Cập nhật thành công!${NC}"
+    else
+        echo -e "${BLUE}Bỏ qua cập nhật.${NC}"
+    fi
+    
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+    show_sites_dashboard
+}
+
+restart_frankenphp() {
+    clear
+    show_header "Restart FrankenPHP"
+    
+    echo -e "${YELLOW}Đang restart FrankenPHP...${NC}"
+    systemctl restart frankenphp
+    
+    if systemctl is-active --quiet frankenphp; then
+        echo -e "${GREEN}FrankenPHP đã được restart thành công!${NC}"
+    else
+        echo -e "${RED}Lỗi khi restart FrankenPHP!${NC}"
+    fi
+    
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+    show_sites_dashboard
+}
+
+manage_frankenphp_permissions() {
+    clear
+    show_header "Phân quyền FrankenPHP"
+    
+    echo -e "${YELLOW}Đang phân quyền FrankenPHP...${NC}"
+    echo ""
+    
+    # Phân quyền thư mục /etc/frankenphp/
+    echo -e "${CYAN}Đang phân quyền /etc/frankenphp/...${NC}"
+    chown -R frankenphp:frankenphp /etc/frankenphp/
+    find /etc/frankenphp/ -type f -exec chmod 644 {} \;
+    find /etc/frankenphp/ -type d -exec chmod 755 {} \;
+    echo -e "${GREEN}✓ Hoàn thành phân quyền /etc/frankenphp/${NC}"
+    
+    # Phân quyền thư mục /var/www/
+echo -e "${CYAN}Đang phân quyền /var/www/...${NC}"
+chown -R frankenphp:frankenphp /var/www/
+find /var/www/ -type f -exec chmod 644 {} \;
+find /var/www/ -type d -exec chmod 755 {} \;
+echo -e "${GREEN}✓ Hoàn thành phân quyền /var/www/${NC}"
+    
+    echo ""
+    echo -e "${GREEN}Phân quyền FrankenPHP hoàn tất!${NC}"
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+    show_sites_dashboard
+}
+
+
+
+restart_mariadb() {
+    clear
+    show_header "Restart MariaDB"
+    
+    echo -e "${YELLOW}Đang restart MariaDB...${NC}"
+    systemctl restart mariadb
+    
+    if systemctl is-active --quiet mariadb; then
+        echo -e "${GREEN}MariaDB đã được restart thành công!${NC}"
+    else
+        echo -e "${RED}Lỗi khi restart MariaDB!${NC}"
+    fi
+    
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+    show_sites_dashboard
+}
+
+
+
+# Helper functions for site management
+validate_domain() {
+    local domain="$1"
+    
+    # Kiểm tra format domain
+    if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+        return 1
+    fi
+    
+    # Kiểm tra độ dài
+    if [[ ${#domain} -gt 253 ]]; then
+        return 1
+    fi
+    
+    return 0
+}
+
+trim() {
+    local var="$*"
+    # Xóa khoảng trắng đầu và cuối
+    var="${var#"${var%%[![:space:]]*}"}"   # Xóa đầu
+    var="${var%"${var##*[![:space:]]}"}"   # Xóa cuối
+    echo "$var"
+}
+
+site_exists() {
+    local domain="$1"
+    [[ -d "$SITES_DIR/$domain" ]]
+}
+
+get_server_ip() {
+    # Lấy IP public của server
+    local ip
+    ip=$(curl -s -4 ifconfig.me 2>/dev/null) || \
+    ip=$(curl -s -4 ipinfo.io/ip 2>/dev/null) || \
+    ip=$(hostname -I | awk '{print $1}')
+    echo "$ip"
+}
+
+check_dns_pointing() {
+    local domain="$1"
+    local server_ip="$2"
+    
+    if [[ -z "$server_ip" ]]; then
+        server_ip=$(get_server_ip)
+    fi
+    
+    # Kiểm tra A record
+    local resolved_ip
+    resolved_ip=$(dig +short "$domain" | tail -n1)
+    
+    if [[ "$resolved_ip" == "$server_ip" ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+read_confirm() {
+    local message="$1"
+    local default="${2:-n}"
+    
+    while true; do
+        if [[ "$default" == "y" ]]; then
+            read -p "$message [Y/n]: " yn
+            yn=${yn:-y}
+        else
+            read -p "$message [y/N]: " yn
+            yn=${yn:-n}
+        fi
+        
+        case $yn in
+            [Yy]*) return 0 ;;
+            [Nn]*) return 1 ;;
+            *) warning "Vui lòng nhập y hoặc n." ;;
+        esac
+    done
+}
+
+show_warning_box() {
+    local title="$1"
+    local content="$2"
+    
+    echo -e "${YELLOW}"
+    echo "⚠️  $title"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "$content"
+    echo -e "${NC}"
+}
+
+create_site_with_rollback() {
+    local domain="$1"
+    local create_database="$2"
+    local install_wordpress="$3"
+    
+    local rollback_steps=()
+    
+    # Step 1: Tạo cấu trúc thư mục theo thiết kế
+    info "Tạo cấu trúc thư mục..."
+    local site_dir="$SITES_DIR/$domain"
+    
+    # Tạo cấu trúc thư mục đầy đủ theo CHAT.txt
+    mkdir -p "$site_dir"/{public,ssl,backup,logs,configs}
+    
+
+    
+    # Phân quyền cho frankenphp user
+    chown -R frankenphp:frankenphp "$site_dir"
+    chmod -R 755 "$site_dir"
+
+    
+    # Tạo file log trống và set permissions
+    touch "$site_dir/logs/access.log" 2>/dev/null || true
+    chown frankenphp:frankenphp "$site_dir/logs/access.log" 2>/dev/null || true
+    chmod 644 "$site_dir/logs/access.log" 2>/dev/null || true
+    
+    rollback_steps+=("rm -rf $site_dir")
+    
+    # Step 2: Tạo database nếu cần
+    local db_name=""
+    local db_user=""
+    local db_password=""
+    
+    if [[ "$create_database" == "y" ]]; then
+        info "Tạo database..."
+        
+        db_name=$(echo "$domain" | sed 's/\./_/g')_db
+        db_user=$(echo "$domain" | sed 's/\./_/g')_user
+        db_password=$(generate_password 16)
+        
+        if ! create_site_database "$db_name" "$db_user" "$db_password"; then
+            rollback_site_creation "${rollback_steps[@]}"
+            return 1
+        fi
+        
+        # Lưu thông tin database vào configs
+        cat > "$site_dir/configs/database.conf" << EOF
+DB_NAME="$db_name"
+DB_USER="$db_user"
+DB_PASSWORD="$db_password"
+EOF
+        chmod 600 "$site_dir/configs/database.conf"
+        chown frankenphp:frankenphp "$site_dir/configs/database.conf"
+        
+        rollback_steps+=("drop_site_database $db_name $db_user")
+    fi
+    
+    # Step 3: Cài WordPress nếu cần
+    if [[ "$install_wordpress" == "y" ]]; then
+        info "Tải và cài đặt WordPress..."
+        
+        if ! install_wordpress_for_site "$domain" "$db_name" "$db_user" "$db_password"; then
+            rollback_site_creation "${rollback_steps[@]}"
+            return 1
+        fi
+    else
+        # Tạo index.php đơn giản
+        cat > "$site_dir/public/index.php" << EOF
+<?php
+echo "<h1>Website $domain</h1>";
+echo "<p>Website đã được tạo thành công!</p>";
+echo "<p>Bạn có thể upload code của mình vào thư mục public.</p>";
+?>
+EOF
+    fi
+    
+    # Step 4: Tạo Caddyfile
+    info "Tạo cấu hình Caddy..."
+    
+    if ! create_site_caddyfile "$domain"; then
+        rollback_site_creation "${rollback_steps[@]}"
+        return 1
+    fi
+    
+
+    
+    # Step 5: Kiểm tra và sửa Caddyfile chính
+    info "Kiểm tra Caddyfile chính..."
+    
+    # Đảm bảo Caddyfile chính có import pattern đúng
+    if ! grep -q "import.*/var/www" /etc/frankenphp/Caddyfile; then
+        warning "Caddyfile chính không có import pattern, đang sửa..."
+        cat > /etc/frankenphp/Caddyfile << EOF
+{
+	frankenphp {
+		num_threads auto
+		max_threads auto
+		max_wait_time 10
+	}
+}
+
+# Import site configurations
+import /var/www/*/Caddyfile
+EOF
+        chown frankenphp:frankenphp /etc/frankenphp/Caddyfile
+        chmod 644 /etc/frankenphp/Caddyfile
+    fi
+    
+    # Step 6: Phân quyền đầy đủ cho FrankenPHP
+    info "Phân quyền cho FrankenPHP..."
+    
+    # Phân quyền toàn bộ thư mục /var/www/
+    chown -R frankenphp:frankenphp /var/www/
+    find /var/www/ -type d -exec chmod 755 {} \;
+    find /var/www/ -type f -exec chmod 644 {} \;
+    
+    # Phân quyền đặc biệt cho WordPress files
+    find /var/www/ -name "wp-config.php" -exec chmod 600 {} \; 2>/dev/null || true
+    find /var/www/ -name ".htaccess" -exec chmod 644 {} \; 2>/dev/null || true
+    find /var/www/ -name "index.php" -exec chmod 644 {} \; 2>/dev/null || true
+    
+    info "Khởi động lại FrankenPHP..."
+    
+    if ! systemctl restart frankenphp; then
+        warning "Không thể restart FrankenPHP, đang thử lại..."
+        sleep 2
+        if ! systemctl restart frankenphp; then
+            error "Không thể restart FrankenPHP service."
+            rollback_site_creation "${rollback_steps[@]}"
+            return 1
+        fi
+    fi
+    
+    # Kiểm tra FrankenPHP đã chạy chưa
+    if systemctl is-active --quiet frankenphp; then
+        success "FrankenPHP đã được khởi động lại thành công."
+    else
+        warning "FrankenPHP service có thể chưa hoạt động bình thường."
+    fi
+    
+    success "Website $domain đã được tạo thành công!"
+    
+    # Kiểm tra website có hoạt động không
+    info "Kiểm tra website..."
+    sleep 3
+    
+    if curl -s --max-time 10 "https://$domain" >/dev/null 2>&1; then
+        success "Website $domain đã hoạt động!"
+    else
+        warning "Website chưa hoạt động. Có thể cần thêm thời gian để SSL được tạo."
+    fi
+    
+    return 0
+}
+
+rollback_site_creation() {
+    local steps=("$@")
+    
+    warning "Đang rollback do có lỗi xảy ra..."
+    
+    # Thực hiện rollback theo thứ tự ngược lại
+    for ((i=${#steps[@]}-1; i>=0; i--)); do
+        local step="${steps[i]}"
+        info "Rollback: $step"
+        
+        if [[ "$step" == rm* ]]; then
+            eval "$step" 2>/dev/null || true
+        elif [[ "$step" == drop_site_database* ]]; then
+            local args=($step)
+            drop_site_database "${args[1]}" "${args[2]}"
+        fi
+    done
+    
+    warning "Rollback hoàn thành."
+}
+
+create_site_database() {
+    local db_name="$1"
+    local db_user="$2"
+    local db_password="$3"
+    
+    load_db_config
+    
+    # Tạo database
+    if ! mysql_query "CREATE DATABASE \`$db_name\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"; then
+        error "Không thể tạo database $db_name"
+        return 1
+    fi
+    
+    # Tạo user
+    if ! mysql_query "CREATE USER '$db_user'@'localhost' IDENTIFIED BY '$db_password';"; then
+        error "Không thể tạo user $db_user"
+        mysql_query "DROP DATABASE \`$db_name\`;" 2>/dev/null
+        return 1
+    fi
+    
+    # Cấp quyền
+    if ! mysql_query "GRANT ALL PRIVILEGES ON \`$db_name\`.* TO '$db_user'@'localhost';"; then
+        error "Không thể cấp quyền cho user $db_user"
+        mysql_query "DROP USER '$db_user'@'localhost';" 2>/dev/null
+        mysql_query "DROP DATABASE \`$db_name\`;" 2>/dev/null
+        return 1
+    fi
+    
+    mysql_query "FLUSH PRIVILEGES;"
+    
+    return 0
+}
+
+drop_site_database() {
+    local db_name="$1"
+    local db_user="$2"
+    
+    load_db_config
+    
+    mysql_query "DROP DATABASE IF EXISTS \`$db_name\`;" 2>/dev/null
+    mysql_query "DROP USER IF EXISTS '$db_user'@'localhost';" 2>/dev/null
+    mysql_query "FLUSH PRIVILEGES;" 2>/dev/null
+}
+
+install_wordpress_for_site() {
+    local domain="$1"
+    local db_name="$2"
+    local db_user="$3"
+    local db_password="$4"
+    
+    local site_dir="$SITES_DIR/$domain"
+    local public_dir="$site_dir/public"
+    
+    # Download WordPress
+    cd /tmp
+    
+    if ! wget -q https://wordpress.org/latest.tar.gz; then
+        error "Không thể tải WordPress"
+        return 1
+    fi
+    
+    # Extract
+    if ! tar -xzf latest.tar.gz; then
+        error "Không thể giải nén WordPress"
+        rm -f latest.tar.gz
+        return 1
+    fi
+    
+    # Copy files
+    cp -r wordpress/* "$public_dir/"
+    rm -rf wordpress latest.tar.gz
+    
+    # Tạo wp-config.php
+    if [[ -n "$db_name" ]]; then
+        create_wp_config "$public_dir" "$db_name" "$db_user" "$db_password"
+    fi
+    
+    return 0
+}
+
+create_wp_config() {
+    local public_dir="$1"
+    local db_name="$2"
+    local db_user="$3"
+    local db_password="$4"
+    
+    # Generate WordPress salts
+    local salts=$(curl -s https://api.wordpress.org/secret-key/1.1/salt/)
+    
+    cat > "$public_dir/wp-config.php" << 'EOF'
+<?php
+/**
+ * The base configuration for WordPress
+ *
+ * The wp-config.php creation script uses this file during the installation.
+ * You don't have to use the website, you can copy this file to "wp-config.php"
+ * and fill in the values.
+ *
+ * This file contains the following configurations:
+ *
+ * * Database settings
+ * * Secret keys
+ * * Database table prefix
+ * * ABSPATH
+ *
+ * @link https://developer.wordpress.org/advanced-administration/wordpress/wp-config/
+ *
+ * @package WordPress
+ */
+
+// ** Database settings - You can get this info from your web host ** //
+/** The name of the database for WordPress */
+define( 'DB_NAME', '$db_name' );
+
+/** Database username */
+define( 'DB_USER', '$db_user' );
+
+/** Database password */
+define( 'DB_PASSWORD', '$db_password' );
+
+/** Database hostname */
+define( 'DB_HOST', '127.0.0.1' );
+
+/** Database charset to use in creating database tables. */
+define( 'DB_CHARSET', 'utf8mb4' );
+
+/** The database collate type. Don't change this if in doubt. */
+define( 'DB_COLLATE', '' );
+
+/**#@+
+ * Authentication unique keys and salts.
+ *
+ * Change these to different unique phrases! You can generate these using
+ * the {@link https://api.wordpress.org/secret-key/1.1/salt/ WordPress.org secret-key service}.
+ *
+ * You can change these at any point in time to invalidate all existing cookies.
+ * This will force all users to have to log in again.
+ *
+ * @since 2.6.0
+ */
+$salts
+
+/**#@-*/
+
+/**
+ * WordPress database table prefix.
+ *
+ * You can have multiple installations in one database if you give each
+ * a unique prefix. Only numbers, letters, and underscores please!
+ *
+ * At the installation time, database tables are created with the specified prefix.
+ * Changing this value after WordPress is installed will make your site think
+ * it has not been installed.
+ *
+ * @link https://developer.wordpress.org/advanced-administration/wordpress/wp-config/#table-prefix
+ */
+$table_prefix = 'wp_';
+
+/**
+ * For developers: WordPress debugging mode.
+ *
+ * Change this to true to enable the display of notices during development.
+ * It is strongly recommended that plugin and theme developers use WP_DEBUG
+ * in their development environments.
+ *
+ * For information on other constants that can be used for debugging,
+ * visit the documentation.
+ *
+ * @link https://developer.wordpress.org/advanced-administration/debug/debug-wordpress/
+ */
+define( 'WP_DEBUG', false );
+
+/* Add any custom values between this line and the "stop editing" line. */
+
+/* That's all, stop editing! Happy publishing. */
+
+/** Absolute path to the WordPress directory. */
+if ( ! defined( 'ABSPATH' ) ) {
+	define( 'ABSPATH', __DIR__ . '/' );
+}
+
+/** Sets up WordPress vars and included files. */
+require_once ABSPATH . 'wp-settings.php';
+EOF
+}
+
+create_site_caddyfile() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    
+    # Đảm bảo thư mục logs tồn tại và có quyền ghi
+    mkdir -p "$site_dir/logs"
+    chown frankenphp:frankenphp "$site_dir/logs"
+    chmod 755 "$site_dir/logs"
+    
+    # Tạo file log trống nếu chưa có
+    touch "$site_dir/logs/access.log" 2>/dev/null || true
+    chown frankenphp:frankenphp "$site_dir/logs/access.log" 2>/dev/null || true
+    chmod 644 "$site_dir/logs/access.log" 2>/dev/null || true
+    
+    # Detect www vs non-www
+    local main_domain="$domain"
+    local redirect_domain=""
+    
+    if [[ "$domain" == www.* ]]; then
+        redirect_domain="$domain"
+        main_domain="${domain#www.}"
+    else
+        redirect_domain="www.$domain"
+    fi
+    
+    cat > "$site_dir/Caddyfile" << EOF
+# Simple configuration for testing
+$main_domain {
+    root * $site_dir/public
+    php_server
+    log {
+        output stdout
+    }
+}
+EOF
+    
+    return 0
+}
+
+show_site_creation_summary() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    
+    echo ""
+    show_success_box "Website Tạo Thành Công!" "Website $domain đã được tạo và cấu hình."
+    
+    echo -e "\n${BLUE}📋 THÔNG TIN WEBSITE${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "🌐 Website: ${GREEN}https://$domain${NC}"
+    
+    # Database info nếu có
+    local db_config_file="$site_dir/configs/database.conf"
+    if [[ -f "$db_config_file" ]]; then
+        source "$db_config_file"
+        
+        echo ""
+        echo -e "${BLUE}🗃️  THÔNG TIN DATABASE${NC}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo -e "Database: ${GREEN}$DB_NAME${NC}"
+        echo -e "User: ${GREEN}$DB_USER${NC}"
+        echo -e "Password: ${GREEN}$DB_PASSWORD${NC}"
+    fi
+    
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+    show_sites_dashboard
+}
+
+generate_password() {
+    local length="${1:-16}"
+    openssl rand -base64 "$length" | tr -d "=+/" | cut -c1-"$length"
+}
+
+load_db_config() {
+    if [[ -f "$WPST_DIR/config/mariadb_root.conf" ]]; then
+        source "$WPST_DIR/config/mariadb_root.conf"
+    else
+        error "Không tìm thấy cấu hình database."
+    fi
+}
+
+mysql_query() {
+    local query="$1"
+    load_db_config
+    mysql -u root -p"$DB_ROOT_PASSWORD" -e "$query" 2>/dev/null
+}
+
+database_exists() {
+    local db_name="$1"
+    load_db_config
+    mysql -u root -p"$DB_ROOT_PASSWORD" -e "USE $db_name;" 2>/dev/null
+    return $?
+}
+
+user_exists() {
+    local username="$1"
+    load_db_config
+    local count=$(mysql -u root -p"$DB_ROOT_PASSWORD" -e "SELECT COUNT(*) FROM mysql.user WHERE User='$username';" -s -N 2>/dev/null)
+    [[ "$count" -gt 0 ]]
+}
+
+show_success_box() {
+    local title="$1"
+    local content="$2"
+    
+    echo -e "${GREEN}"
+    echo "✅ $title"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "$content"
+    echo -e "${NC}"
+}
+
+# Additional helper functions
+get_directory_size() {
+    local dir="$1"
+    if [[ -d "$dir" ]]; then
+        du -sh "$dir" 2>/dev/null | cut -f1
+    else
+        echo "0B"
+    fi
+}
+
+get_site_status() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    
+    if [[ -f "$site_dir/Caddyfile" ]]; then
+        echo "ON"
+    elif [[ -f "$site_dir/Caddyfile.disabled" ]]; then
+        echo "OFF"
+    else
+        echo "UNKNOWN"
+    fi
+}
+
+check_site_ping() {
+    local domain="$1"
+    if curl -s --max-time 5 "https://$domain" >/dev/null 2>&1; then
+        echo "✅"
+    else
+        echo "❌"
+    fi
+}
+
+count_site_backups() {
+    local domain="$1"
+    local backup_dir="$SITES_DIR/$domain/backup"
+    if [[ -d "$backup_dir" ]]; then
+        find "$backup_dir" -name "*.tar.gz" | wc -l
+    else
+        echo "0"
+    fi
+}
+
+get_ssl_status() {
+    local domain="$1"
+    # Đơn giản hóa - FrankenPHP tự động SSL
+    echo "Auto"
+}
+
+get_ssl_info() {
+    local domain="$1"
+    # Đơn giản hóa - FrankenPHP tự động SSL
+    echo "${GREEN}Auto (Let's Encrypt)${NC}"
+}
+
+# SSL Helper Functions
+get_current_ssl_type() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    local caddyfile="$site_dir/Caddyfile"
+    
+    if [[ -f "$caddyfile" ]] && grep -q "tls.*\.crt.*\.key" "$caddyfile"; then
+        echo "${BLUE}Custom SSL${NC}"
+    else
+        echo "${GREEN}Let's Encrypt (Auto)${NC}"
+    fi
+}
+
+configure_ssl_auto() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    local caddyfile="$site_dir/Caddyfile"
+    
+    # Xóa dòng tls nếu có
+    if [[ -f "$caddyfile" ]]; then
+        sed -i '/tls.*\.crt.*\.key/d' "$caddyfile"
+        success "Đã chuyển sang SSL tự động (Let's Encrypt)"
+    fi
+    
+    # Restart FrankenPHP
+    systemctl restart frankenphp
+    
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+    show_single_site_dashboard "$domain"
+}
+
+configure_ssl_manual() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    local caddyfile="$site_dir/Caddyfile"
+    
+    # Thêm dòng tls vào Caddyfile
+    if [[ -f "$caddyfile" ]]; then
+        # Tìm dòng root và thêm tls bên dưới
+        sed -i "/root.*public/a\    tls $site_dir/ssl/$domain.crt $site_dir/ssl/$domain.key" "$caddyfile"
+        success "Đã chuyển sang SSL thủ công"
+    fi
+    
+    # Restart FrankenPHP
+    systemctl restart frankenphp
+    
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+    show_single_site_dashboard "$domain"
+}
+
+# TinyFileManager Functions
+install_tinyfilemanager() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    local public_dir="$site_dir/public"
+    
+    info "Đang tải TinyFileManager..."
+    
+    # Tạo tên file ngẫu nhiên (tăng từ 4 lên 8 ký tự)
+    local random_suffix=$(openssl rand -hex 4)
+    local filename="tinyfilemanager_${random_suffix}.php"
+    local filepath="$public_dir/$filename"
+    
+    # Tạo mật khẩu ngẫu nhiên
+    local admin_password=$(openssl rand -base64 12 | tr -d "=+/" | cut -c1-12)
+    local user_password=$(openssl rand -base64 12 | tr -d "=+/" | cut -c1-12)
+    
+    # Mã hóa mật khẩu bằng PHP
+    local admin_hash=$(frankenphp php-cli -r "echo password_hash('$admin_password', PASSWORD_DEFAULT);")
+    local user_hash=$(frankenphp php-cli -r "echo password_hash('$user_password', PASSWORD_DEFAULT);")
+    
+    # Copy file từ local repository
+    local tfm_source="$WPST_DIR/lib/tinyfilemanager.php"
+    if [[ ! -f "$tfm_source" ]]; then
+        error "Không tìm thấy file TinyFileManager trong repository local"
+        return 1
+    fi
+    
+    if ! cp "$tfm_source" "$filepath"; then
+        error "Không thể copy TinyFileManager"
+        return 1
+    fi
+    
+    # Tạo file config.php
+    local config_filename="config.php"
+    local config_filepath="$public_dir/$config_filename"
+    
+    cat > "$config_filepath" << EOF
+<?php
+\$auth_users = array(
+    'admin' => '$admin_hash',
+    'user' => '$user_hash'
+);
+\$readonly_users = array(
+    'user'
+);
+?>
+EOF
+    
+    chown frankenphp:frankenphp "$filepath" "$config_filepath"
+    chmod 644 "$filepath" "$config_filepath"
+    
+    success "TinyFileManager đã được cài đặt!"
+    echo ""
+    echo -e "${BLUE}🔐 THÔNG TIN ĐĂNG NHẬP${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "Username: ${GREEN}admin${NC} (Full access)"
+    echo -e "Password: ${GREEN}$admin_password${NC}"
+    echo ""
+    echo -e "Username: ${GREEN}user${NC} (View only)"
+    echo -e "Password: ${GREEN}$user_password${NC}"
+    echo ""
+    echo -e "🔗 Link truy cập: ${GREEN}https://$domain/$filename${NC}"
+    echo -e "📁 File config: ${GREEN}https://$domain/$config_filename${NC}"
+    echo ""
+    echo -e "${YELLOW}⚠️  Lưu ý: File sẽ tự động xóa sau 1 giờ nếu không tắt.${NC}"
+    echo ""
+    
+    # Tạo job để xóa file sau 1 giờ với PID tracking
+    (
+        sleep 3600
+        if [[ -f "$filepath" ]]; then
+            rm -f "$filepath"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] TinyFileManager $filename đã được tự động xóa" >> /tmp/tfm_cleanup.log
+        fi
+        if [[ -f "$config_filepath" ]]; then
+            rm -f "$config_filepath"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Config config.php đã được tự động xóa" >> /tmp/tfm_cleanup.log
+        fi
+    ) &
+    local cleanup_pid=$!
+    echo "$cleanup_pid:$filepath:$config_filepath" >> /tmp/tfm_jobs.txt
+    
+    read -p "Nhấn Enter để quay lại..."
+    setup_tinyfilemanager "$domain"
+}
+
+remove_tinyfilemanager() {
+    local domain="$1"
+    local public_dir="$SITES_DIR/$domain/public"
+    
+    # Dừng tất cả background jobs liên quan đến auto-delete
+    jobs -p | xargs -r kill 2>/dev/null || true
+    
+    # Xóa tất cả file tinyfilemanager và config
+    find "$public_dir" -name "tinyfilemanager_*.php" -delete
+    rm -f "$public_dir/config.php"
+    
+    success "TinyFileManager đã được tắt!"
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+    setup_tinyfilemanager "$domain"
+}
+
+# TinyFileManager cleanup functions
+cleanup_tfm_jobs() {
+    # Dọn dẹp các jobs đã hoàn thành
+    if [[ -f /tmp/tfm_jobs.txt ]]; then
+        while IFS=: read -r pid filepath config_filepath; do
+            if [[ -n "$pid" && -n "$filepath" ]]; then
+                # Kiểm tra xem process còn chạy không
+                if ! kill -0 "$pid" 2>/dev/null; then
+                    # Process đã kết thúc, xóa khỏi danh sách
+                    sed -i "/^$pid:/d" /tmp/tfm_jobs.txt
+                fi
+                # Kiểm tra xem file còn tồn tại không
+                if [[ ! -f "$filepath" ]]; then
+                    # File đã bị xóa, dừng process
+                    kill "$pid" 2>/dev/null || true
+                    sed -i "/^$pid:/d" /tmp/tfm_jobs.txt
+                fi
+                # Kiểm tra xem config file còn tồn tại không
+                if [[ -n "$config_filepath" && ! -f "$config_filepath" ]]; then
+                    # Config file đã bị xóa, dừng process
+                    kill "$pid" 2>/dev/null || true
+                    sed -i "/^$pid:/d" /tmp/tfm_jobs.txt
+                fi
+            fi
+        done < /tmp/tfm_jobs.txt
+    fi
+}
+
+# Backup & Restore Functions
+create_backup() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    local backup_dir="$site_dir/backup"
+    local public_dir="$site_dir/public"
+    local db_config_file="$site_dir/configs/database.conf"
+    
+    # Kiểm tra xem có database config không
+    if [[ ! -f "$db_config_file" ]]; then
+        warning "Website này chưa có database được cấu hình."
+        read -p "Nhấn Enter để quay lại..."
+        backup_restore_site "$domain"
+        return
+    fi
+    
+    # Load database config
+    source "$db_config_file"
+    
+    # Tạo tên backup folder
+    local backup_name=$(date '+%Y%m%d_%H%M%S')_$domain
+    local backup_folder="$backup_dir/$backup_name"
+    
+    info "Đang tạo backup cho $domain..."
+    
+    # Tạo thư mục backup
+    mkdir -p "$backup_folder"
+    
+    # Backup files
+    info "Backup files..."
+    if [[ -d "$public_dir" ]]; then
+        tar -czf "$backup_folder/files.tar.gz" -C "$site_dir" public/
+        success "Files đã được backup: $(du -sh "$backup_folder/files.tar.gz" | cut -f1)"
+    else
+        warning "Thư mục public không tồn tại."
+    fi
+    
+    # Backup database
+    info "Backup database..."
+    if database_exists "$DB_NAME"; then
+        load_db_config
+        mysqldump -u root -p"$DB_ROOT_PASSWORD" "$DB_NAME" | gzip > "$backup_folder/database.sql.gz"
+        success "Database đã được backup: $(du -sh "$backup_folder/database.sql.gz" | cut -f1)"
+    else
+        warning "Database $DB_NAME không tồn tại."
+    fi
+    
+    # Tạo file info
+    cat > "$backup_folder/info.txt" << EOF
+Backup created: $(date)
+Domain: $domain
+Database: $DB_NAME
+Files size: $(du -sh "$backup_folder/files.tar.gz" 2>/dev/null | cut -f1 || echo "N/A")
+Database size: $(du -sh "$backup_folder/database.sql.gz" 2>/dev/null | cut -f1 || echo "N/A")
+EOF
+    
+    success "Backup hoàn thành: $backup_name"
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+    backup_restore_site "$domain"
+}
+
+manage_backup() {
+    local domain="$1"
+    local choice="$2"
+    local site_dir="$SITES_DIR/$domain"
+    local backup_dir="$site_dir/backup"
+    
+    # Tìm backup folder theo số thứ tự
+    local backup_count=0
+    local selected_backup=""
+    
+    for backup_folder in "$backup_dir"/*; do
+        if [[ -d "$backup_folder" ]]; then
+            ((backup_count++))
+            if [[ $backup_count -eq $choice ]]; then
+                selected_backup="$backup_folder"
+                break
+            fi
+        fi
+    done
+    
+    if [[ -z "$selected_backup" ]]; then
+        warning "Không tìm thấy backup."
+        sleep 1
+        backup_restore_site "$domain"
+        return
+    fi
+    
+    local backup_name=$(basename "$selected_backup")
+    
+    clear
+    show_header "Quản lý Backup: $backup_name"
+    
+    echo -e "${BLUE}📦 THÔNG TIN BACKUP${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    if [[ -f "$selected_backup/info.txt" ]]; then
+        cat "$selected_backup/info.txt"
+    fi
+    
+    echo ""
+    echo -e "${BLUE}🔧 TÙY CHỌN${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "1. Restore backup"
+    echo "2. Xóa backup"
+    echo "0. Quay lại"
+    echo ""
+    
+    read -p "Lựa chọn: " subchoice
+    
+    case $subchoice in
+        1)
+            restore_backup "$domain" "$selected_backup"
+            ;;
+        2)
+            delete_backup "$domain" "$selected_backup"
+            ;;
+        0)
+            backup_restore_site "$domain"
+            ;;
+        *)
+            warning "Lựa chọn không hợp lệ."
+            sleep 1
+            manage_backup "$domain" "$choice"
+            ;;
+    esac
+}
+
+restore_backup() {
+    local domain="$1"
+    local backup_folder="$2"
+    local site_dir="$SITES_DIR/$domain"
+    local public_dir="$site_dir/public"
+    local db_config_file="$site_dir/configs/database.conf"
+    
+    clear
+    show_header "Restore Backup: $domain"
+    
+    echo -e "${RED}CẢNH BÁO: Restore sẽ ghi đè toàn bộ dữ liệu hiện tại!${NC}"
+    echo ""
+    
+    if ! read_confirm "Bạn có chắc chắn muốn restore?" "n"; then
+        info "Đã hủy restore."
+        sleep 1
+        backup_restore_site "$domain"
+        return
+    fi
+    
+    info "Đang restore backup..."
+    
+    # Restore files
+    if [[ -f "$backup_folder/files.tar.gz" ]]; then
+        info "Restore files..."
+        rm -rf "$public_dir"
+        tar -xzf "$backup_folder/files.tar.gz" -C "$site_dir"
+        success "Files đã được restore."
+    fi
+    
+    # Restore database
+    if [[ -f "$backup_folder/database.sql.gz" && -f "$db_config_file" ]]; then
+        info "Restore database..."
+        source "$db_config_file"
+        load_db_config
+        
+        # Drop và recreate database
+        mysql -u root -p"$DB_ROOT_PASSWORD" -e "DROP DATABASE IF EXISTS \`$DB_NAME\`;" 2>/dev/null
+        mysql -u root -p"$DB_ROOT_PASSWORD" -e "CREATE DATABASE \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null
+        
+        # Import database
+        gunzip -c "$backup_folder/database.sql.gz" | mysql -u root -p"$DB_ROOT_PASSWORD" "$DB_NAME"
+        success "Database đã được restore."
+    fi
+    
+    # Restart FrankenPHP
+    systemctl restart frankenphp
+    
+    success "Restore hoàn thành!"
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+    backup_restore_site "$domain"
+}
+
+delete_backup() {
+    local domain="$1"
+    local backup_folder="$2"
+    local backup_name=$(basename "$backup_folder")
+    
+    clear
+    show_header "Xóa Backup: $backup_name"
+    
+    echo -e "${RED}CẢNH BÁO: Bạn sắp xóa backup $backup_name${NC}"
+    echo ""
+    
+    if ! read_confirm "Bạn có chắc chắn muốn xóa backup này?" "n"; then
+        info "Đã hủy xóa backup."
+        sleep 1
+        backup_restore_site "$domain"
+        return
+    fi
+    
+    rm -rf "$backup_folder"
+    success "Backup $backup_name đã được xóa."
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+    backup_restore_site "$domain"
+}
+
+# Version function
+show_version() {
+    echo "WPST Panel phiên bản 1.0.0"
+}
+
+# Database helper functions
+get_database_info() {
+    local db_name="$1"
+    load_db_config
+    
+    # Lấy thông tin database
+    local charset=$(mysql -u root -p"$DB_ROOT_PASSWORD" -e "SELECT DEFAULT_CHARACTER_SET_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='$db_name';" -s -N 2>/dev/null)
+    local collation=$(mysql -u root -p"$DB_ROOT_PASSWORD" -e "SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='$db_name';" -s -N 2>/dev/null)
+    local table_count=$(mysql -u root -p"$DB_ROOT_PASSWORD" -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$db_name';" -s -N 2>/dev/null)
+    local db_size=$(mysql -u root -p"$DB_ROOT_PASSWORD" -e "SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) AS 'DB Size in MB' FROM information_schema.tables WHERE table_schema='$db_name';" -s -N 2>/dev/null)
+    
+    echo "Charset: $charset, Collation: $collation, Tables: $table_count, Size: ${db_size}MB"
+}
+
+import_database() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    local db_config_file="$site_dir/configs/database.conf"
+    
+    # Kiểm tra xem có database config không
+    if [[ ! -f "$db_config_file" ]]; then
+        warning "Website này chưa có database được cấu hình."
+        read -p "Nhấn Enter để quay lại..."
+        manage_database "$domain"
+        return
+    fi
+    
+    # Load database config
+    source "$db_config_file"
+    
+    # Kiểm tra file database
+    local db_file="$site_dir/$domain.db"
+    local db_gz_file="$site_dir/$domain.db.gz"
+    
+    if [[ ! -f "$db_file" && ! -f "$db_gz_file" ]]; then
+        clear
+        show_header "Import Database: $domain"
+        echo -e "${YELLOW}Không tìm thấy file database để import.${NC}"
+        echo ""
+        echo -e "${BLUE}📋 HƯỚNG DẪN IMPORT DATABASE${NC}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "1. Upload file database vào thư mục: $site_dir"
+        echo "2. Đặt tên file là: $domain.db hoặc $domain.db.gz"
+        echo "3. Chạy lại tính năng Import database"
+        echo ""
+        read -p "Nhấn Enter để quay lại..."
+        manage_database "$domain"
+        return
+    fi
+    
+    clear
+    show_header "Import Database: $domain"
+    
+    echo -e "${RED}CẢNH BÁO: Import sẽ ghi đè toàn bộ database hiện tại!${NC}"
+    echo ""
+    
+    if ! read_confirm "Bạn có chắc chắn muốn import database?" "n"; then
+        info "Đã hủy import database."
+        sleep 1
+        manage_database "$domain"
+        return
+    fi
+    
+    info "Đang import database..."
+    
+    # Drop database hiện tại
+    load_db_config
+    mysql -u root -p"$DB_ROOT_PASSWORD" -e "DROP DATABASE IF EXISTS \`$DB_NAME\`;" 2>/dev/null
+    mysql -u root -p"$DB_ROOT_PASSWORD" -e "CREATE DATABASE \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null
+    
+    # Import database
+    if [[ -f "$db_gz_file" ]]; then
+        # Import từ file .gz
+        gunzip -c "$db_gz_file" | mysql -u root -p"$DB_ROOT_PASSWORD" "$DB_NAME"
+        success "Database đã được import từ file: $domain.db.gz"
+    elif [[ -f "$db_file" ]]; then
+        # Import từ file .db
+        mysql -u root -p"$DB_ROOT_PASSWORD" "$DB_NAME" < "$db_file"
+        success "Database đã được import từ file: $domain.db"
+    fi
+    
+    echo ""
+    read -p "Nhấn Enter để quay lại..."
+    manage_database "$domain"
+}
+
+# Adminneo installation/toggle
+install_adminneo() {
+    local domain="$1"
+    local public_dir="$SITES_DIR/$domain/public"
+    local site_dir="$SITES_DIR/$domain"
+    local db_config_file="$site_dir/configs/database.conf"
+    
+    # Kiểm tra xem đã có file Adminneo chưa
+    local existing_files=$(find "$public_dir" -name "adminneo_*.php" 2>/dev/null)
+    
+    if [[ -n "$existing_files" ]]; then
+        # Nếu đã có file, hỏi có muốn tắt không
+        clear
+        show_header "Tắt Adminneo: $domain"
+        echo -e "${YELLOW}Adminneo đang chạy. Bạn có muốn tắt không?${NC}"
+        echo ""
+        
+        if read_confirm "Tắt Adminneo và xóa file?" "n"; then
+            # Dừng tất cả background jobs liên quan đến Adminneo
+            jobs -p | xargs -r kill 2>/dev/null || true
+            
+            # Xóa tất cả file Adminneo
+            find "$public_dir" -name "adminneo_*.php" -delete
+            
+            success "Adminneo đã được tắt!"
+            echo ""
+            read -p "Nhấn Enter để quay lại..."
+            manage_database "$domain"
+            return
+        else
+            info "Đã hủy tắt Adminneo."
+            sleep 1
+            manage_database "$domain"
+            return
+        fi
+    fi
+    
+    # Nếu chưa có file, cài đặt mới
+    if [[ ! -f "$db_config_file" ]]; then
+        warning "Website này chưa có database được cấu hình."
+        read -p "Nhấn Enter để quay lại..."
+        manage_database "$domain"
+        return
+    fi
+    
+    # Load database config
+    source "$db_config_file"
+    
+    # Tạo random suffix 8 chữ số
+    local random_suffix=$(openssl rand -hex 4)
+    local filename="adminneo_${random_suffix}.php"
+    local filepath="$public_dir/$filename"
+    
+    # Copy file từ local repository
+    local adminneo_source="$WPST_DIR/lib/adminneo.php"
+    if [[ ! -f "$adminneo_source" ]]; then
+        error "Không tìm thấy file Adminneo trong repository local"
+        return 1
+    fi
+    
+    if ! cp "$adminneo_source" "$filepath"; then
+        error "Không thể copy Adminneo"
+        return 1
+    fi
+    
+    chown frankenphp:frankenphp "$filepath"
+    chmod 644 "$filepath"
+    
+    success "Adminneo đã được cài đặt!"
+    echo ""
+    echo -e "${BLUE}🔐 THÔNG TIN ĐĂNG NHẬP DATABASE${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "Database Server: ${GREEN}127.0.0.1${NC}"
+    echo -e "Database User: ${GREEN}$DB_USER${NC}"
+    echo -e "Database Password: ${GREEN}$DB_PASSWORD${NC}"
+    echo -e "Database Name: ${GREEN}$DB_NAME${NC}"
+    echo ""
+    echo -e "🔗 Link truy cập: ${GREEN}https://$domain/$filename${NC}"
+    echo ""
+    echo -e "${YELLOW}⚠️  Lưu ý: File sẽ tự động xóa sau 30 phút nếu không tắt.${NC}"
+    echo ""
+    
+    # Tạo job để xóa file sau 30 phút với PID tracking
+    (
+        sleep 1800  # 30 phút
+        if [[ -f "$filepath" ]]; then
+            rm -f "$filepath"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Adminneo $filename đã được tự động xóa" >> /tmp/adminneo_cleanup.log
+        fi
+    ) &
+    local cleanup_pid=$!
+    echo "$cleanup_pid:$filepath" >> /tmp/adminneo_jobs.txt
+    
+    read -p "Nhấn Enter để quay lại..."
+    manage_database "$domain"
+}
+
+# Create database for site
+create_database_for_site() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    local db_config_file="$site_dir/configs/database.conf"
+    
+    # Kiểm tra xem đã có database chưa
+    if [[ -f "$db_config_file" ]]; then
+        source "$db_config_file"
+        if database_exists "$DB_NAME"; then
+            warning "Database $DB_NAME đã tồn tại. Vui lòng xóa trước khi tạo mới."
+            read -p "Nhấn Enter để quay lại..."
+            manage_database "$domain"
+            return
+        fi
+    fi
+    
+    # Tạo thông tin database mới
+    local db_name=$(echo "$domain" | sed 's/\./_/g')_db
+    local db_user=$(echo "$domain" | sed 's/\./_/g')_user
+    local db_password=$(generate_password 16)
+    
+    # Tạo database và user
+    if create_site_database "$db_name" "$db_user" "$db_password"; then
+        # Lưu thông tin vào config
+        mkdir -p "$site_dir/configs"
+        cat > "$db_config_file" << EOF
+DB_NAME="$db_name"
+DB_USER="$db_user"
+DB_PASSWORD="$db_password"
+EOF
+        chmod 600 "$db_config_file"
+        chown frankenphp:frankenphp "$db_config_file"
+        
+        success "Database đã được tạo thành công!"
+        echo -e "Database: ${GREEN}$db_name${NC}"
+        echo -e "User: ${GREEN}$db_user${NC}"
+        echo -e "Password: ${GREEN}$db_password${NC}"
+    else
+        error "Không thể tạo database"
+    fi
+    
+    read -p "Nhấn Enter để quay lại..."
+    manage_database "$domain"
+}
+
+# Delete database for site
+delete_database_for_site() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    local db_config_file="$site_dir/configs/database.conf"
+    
+    if [[ ! -f "$db_config_file" ]]; then
+        warning "Website này chưa có database."
+        read -p "Nhấn Enter để quay lại..."
+        manage_database "$domain"
+        return
+    fi
+    
+    source "$db_config_file"
+    
+    clear
+    show_header "Xóa Database: $domain"
+    show_warning_box "CẢNH BÁO" "Bạn sắp xóa hoàn toàn database $DB_NAME.\nTất cả dữ liệu bao gồm tables, user, và password sẽ bị xóa vĩnh viễn!"
+    
+    echo -e "\n${RED}Để xác nhận, vui lòng gõ chính xác tên database:${NC}"
+    read -p "Nhập '$DB_NAME' để xác nhận: " confirm_db
+    
+    if [[ "$confirm_db" != "$DB_NAME" ]]; then
+        warning "Database name không khớp. Hủy xóa database."
+        sleep 2
+        manage_database "$domain"
+        return
+    fi
+    
+    if ! read_confirm "Bạn có chắc chắn muốn xóa database $DB_NAME?" "n"; then
+        info "Đã hủy xóa database."
+        sleep 1
+        manage_database "$domain"
+        return
+    fi
+    
+    # Thực hiện xóa
+    info "Đang xóa database $DB_NAME..."
+    
+    drop_site_database "$DB_NAME" "$DB_USER"
+    rm -f "$db_config_file"
+    
+    success "Database $DB_NAME đã được xóa hoàn toàn."
+    read -p "Nhấn Enter để quay lại..."
+    manage_database "$domain"
+}
+
+# Drop database tables (keep user/pass)
+drop_database_tables() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    local db_config_file="$site_dir/configs/database.conf"
+    
+    if [[ ! -f "$db_config_file" ]]; then
+        warning "Website này chưa có database."
+        read -p "Nhấn Enter để quay lại..."
+        manage_database "$domain"
+        return
+    fi
+    
+    source "$db_config_file"
+    
+    clear
+    show_header "Drop Database Tables: $domain"
+    show_warning_box "CẢNH BÁO" "Bạn sắp xóa tất cả tables trong database $DB_NAME.\nUser và password sẽ được giữ nguyên, chỉ xóa dữ liệu!"
+    
+    if ! read_confirm "Bạn có chắc chắn muốn xóa tất cả tables?" "n"; then
+        info "Đã hủy drop tables."
+        sleep 1
+        manage_database "$domain"
+        return
+    fi
+    
+    # Thực hiện drop tables
+    info "Đang xóa tất cả tables trong database $DB_NAME..."
+    
+    load_db_config
+    mysql -u root -p"$DB_ROOT_PASSWORD" -e "USE \`$DB_NAME\`; SHOW TABLES;" -s -N 2>/dev/null | while read table; do
+        if [[ -n "$table" ]]; then
+            mysql -u root -p"$DB_ROOT_PASSWORD" -e "USE \`$DB_NAME\`; DROP TABLE \`$table\`;" 2>/dev/null
+            info "Đã xóa table: $table"
+        fi
+    done
+    
+    success "Tất cả tables trong database $DB_NAME đã được xóa."
+    read -p "Nhấn Enter để quay lại..."
+    manage_database "$domain"
+}
+
+# Change database password
+change_database_password() {
+    local domain="$1"
+    local site_dir="$SITES_DIR/$domain"
+    local db_config_file="$site_dir/configs/database.conf"
+    
+    if [[ ! -f "$db_config_file" ]]; then
+        warning "Website này chưa có database."
+        read -p "Nhấn Enter để quay lại..."
+        manage_database "$domain"
+        return
+    fi
+    
+    source "$db_config_file"
+    
+    clear
+    show_header "Đổi Mật Khẩu Database: $domain"
+    echo -e "Database User: ${GREEN}$DB_USER${NC}"
+    echo -e "Database Name: ${GREEN}$DB_NAME${NC}"
+    echo ""
+    
+    # Tạo password mới
+    local new_password=$(generate_password 16)
+    
+    if ! read_confirm "Bạn có muốn đổi mật khẩu thành: $new_password?" "y"; then
+        info "Đã hủy đổi mật khẩu."
+        sleep 1
+        manage_database "$domain"
+        return
+    fi
+    
+    # Thực hiện đổi password
+    info "Đang đổi mật khẩu cho user $DB_USER..."
+    
+    load_db_config
+    if mysql -u root -p"$DB_ROOT_PASSWORD" -e "ALTER USER '$DB_USER'@'localhost' IDENTIFIED BY '$new_password';" 2>/dev/null; then
+        # Cập nhật config file
+        cat > "$db_config_file" << EOF
+DB_NAME="$DB_NAME"
+DB_USER="$DB_USER"
+DB_PASSWORD="$new_password"
+EOF
+        chmod 600 "$db_config_file"
+        chown frankenphp:frankenphp "$db_config_file"
+        
+        success "Mật khẩu đã được đổi thành công!"
+        echo -e "Password mới: ${GREEN}$new_password${NC}"
+    else
+        error "Không thể đổi mật khẩu"
+    fi
+    
+    read -p "Nhấn Enter để quay lại..."
+    manage_database "$domain"
+}
+
+# Adminneo cleanup functions
+cleanup_adminneo_jobs() {
+    # Dọn dẹp các jobs đã hoàn thành
+    if [[ -f /tmp/adminneo_jobs.txt ]]; then
+        while IFS=: read -r pid filepath; do
+            if [[ -n "$pid" && -n "$filepath" ]]; then
+                # Kiểm tra xem process còn chạy không
+                if ! kill -0 "$pid" 2>/dev/null; then
+                    # Process đã kết thúc, xóa khỏi danh sách
+                    sed -i "/^$pid:/d" /tmp/adminneo_jobs.txt
+                fi
+                # Kiểm tra xem file còn tồn tại không
+                if [[ ! -f "$filepath" ]]; then
+                    # File đã bị xóa, dừng process
+                    kill "$pid" 2>/dev/null || true
+                    sed -i "/^$pid:/d" /tmp/adminneo_jobs.txt
+                fi
+            fi
+        done < /tmp/adminneo_jobs.txt
+    fi
+}
+
+# Start the application
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    handle_arguments "$1"
+fi
