@@ -1065,7 +1065,7 @@ define( 'WP_DEBUG', false );
 
 /** Absolute path to the WordPress directory. */
 if ( ! defined( 'ABSPATH' ) ) {
-    define( 'ABSPATH', __DIR__ . '/' );
+	define( 'ABSPATH', __DIR__ . '/' );
 }
 
 /** Sets up WordPress vars and included files. */
@@ -1220,7 +1220,7 @@ edit_caddyfile() {
         show_header "Validate Caddyfile: $domain"
         
         echo -e "${BLUE}🔍 ĐANG VALIDATE CẤU HÌNH${NC}"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         
         # Validate cấu hình với frankenphp
         if frankenphp validate --config "$editing_file" 2>/dev/null; then
@@ -1279,7 +1279,7 @@ toggle_site_status() {
     local current_status=$(get_site_status "$domain")
     
     if [[ "$current_status" == "ON" ]]; then
-        if [[ -f "$site_dir/Caddyfile" ]]; then
+    if [[ -f "$site_dir/Caddyfile" ]]; then
             mv "$site_dir/Caddyfile" "$site_dir/Caddyfile.disabled"
             success "Website $domain đã được tắt."
         fi
@@ -1595,13 +1595,13 @@ import_database() {
         clear
         show_header "Import Database: $domain"
         echo -e "${YELLOW}Không tìm thấy file database để import.${NC}"
-        echo ""
+    echo ""
         echo -e "${BLUE}📋 HƯỚNG DẪN IMPORT DATABASE${NC}"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "1. Upload file database vào thư mục: $site_dir"
         echo "2. Đặt tên file là: $domain.db hoặc $domain.db.gz"
         echo "3. Chạy lại tính năng Import database"
-        echo ""
+    echo ""
         read -p "Nhấn Enter để quay lại..."
         manage_database "$domain"
         return
@@ -2035,7 +2035,7 @@ configure_ssl_auto() {
     systemctl restart frankenphp
     
     echo ""
-    read -p "Nhấn Enter để quay lại..."
+        read -p "Nhấn Enter để quay lại..."
     show_single_site_dashboard "$domain"
 }
 
@@ -2080,7 +2080,7 @@ toggle_8g_firewall() {
     local caddyfile="$site_dir/Caddyfile"
     local firewall_source="$WPST_DIR/lib/8g-caddy.snippet"
     
-    clear
+        clear
     show_header "8G Firewall: $domain"
     
     local current_status=$(get_8g_firewall_status "$domain")
@@ -2092,10 +2092,10 @@ toggle_8g_firewall() {
     else
         echo -e "8G Firewall: ${RED}ĐANG TẮT${NC}"
     fi
-    echo ""
+        echo ""
     
     echo -e "${BLUE}📋 THÔNG TIN 8G FIREWALL${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "8G Firewall là bộ lọc bảo mật mạnh mẽ giúp chặn:"
     echo "• SQL Injection attacks"
     echo "• XSS (Cross-site scripting)"
@@ -2124,8 +2124,8 @@ toggle_8g_firewall() {
         fi
     fi
     
-    echo ""
-    read -p "Nhấn Enter để quay lại..."
+        echo ""
+        read -p "Nhấn Enter để quay lại..."
     show_single_site_dashboard "$domain"
 }
 
@@ -2233,8 +2233,8 @@ setup_tinyfilemanager() {
         if [[ -f "$config_file" ]]; then
             echo -e "📁 File config: ${GREEN}config.php${NC}"
         fi
-        echo ""
-        
+    echo ""
+    
         # Hiển thị thông tin đăng nhập
         echo -e "${BLUE}🔐 THÔNG TIN ĐĂNG NHẬP${NC}"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -2263,7 +2263,7 @@ setup_tinyfilemanager() {
                 ;;
             *)
                 warning "Lựa chọn không hợp lệ."
-                sleep 1
+        sleep 1
                 setup_tinyfilemanager "$domain"
                 ;;
         esac
